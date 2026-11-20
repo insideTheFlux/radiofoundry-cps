@@ -12,6 +12,34 @@ pub const FL: usize = 0x20000;
 /// Bytes a whole codeplug image covers.
 pub const CODEPLUG_SPAN: usize = 0x120000;
 
+/// The ranges qdmr transfers (open-firmware-cps.md 7.1): what a read from a radio needs for every record the editor
+/// shows. Calibration and the radio's own settings (0x10000-0x1FFFF) are never part of it.
+pub const REGIONS: [(usize, usize); 4] = [
+    (EE + 0x00080, EE + 0x06060),
+    (EE + 0x07500, EE + 0x0B000),
+    (FL, FL + 0x011A0),
+    (FL + 0x7B000, FL + 0x8EE60),
+];
+/// The codeplug settings area (codeplug-settings.md): one sector qdmr leaves alone.
+pub const SETTINGS_AREA: (usize, usize) = (EE + 0x0E000, EE + 0x0F000);
+/// The size of a block the radio's fast protocol moves.
+pub const BLOCK: usize = 0x1000;
+
+/// The 4 KB blocks a read from a radio needs: the regions above and the settings area, in address order.
+pub fn editor_blocks() -> Vec<usize> {
+    let mut v: Vec<usize> = Vec::new();
+    for &(a, b) in REGIONS.iter().chain(std::iter::once(&SETTINGS_AREA)) {
+        let mut s = a / BLOCK * BLOCK;
+        while s < b {
+            v.push(s);
+            s += BLOCK;
+        }
+    }
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 #[derive(Clone, Debug)]
 pub struct Image {
     bytes: Vec<u8>,
@@ -57,5 +85,19 @@ impl Image {
 
     pub fn view(&self, addr: usize, len: usize) -> &[u8] {
         &self.bytes[addr..addr + len]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_editor_reads_these_blocks() {
+        let b = editor_blocks();
+        assert_eq!(b.first(), Some(&0));
+        assert!(b.contains(&0xE000) && b.contains(&0x20000) && b.contains(&(FL + 0x7B000)));
+        assert!(b.windows(2).all(|w| w[0] < w[1] && w[0] % BLOCK == 0));
+        assert!(b.iter().all(|&a| a + BLOCK <= CODEPLUG_SPAN));
     }
 }

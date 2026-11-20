@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 insideTheFlux
 
-//! Reads and writes a radio's codeplug image over its serial port (programming cable or USB), with the open
-//! firmware CPS protocol (RadioFoundry `docs/spec/open-firmware-cps.md`).
+//! Talks to a RadioFoundry radio over its serial port: the debug link's frames (RadioFoundry `docs/spec/debuglink.md`)
+//! and the fast codeplug protocol on top of them (`docs/spec/cps-fast.md`).
 
-/// Names of the serial ports on this computer, for the port chooser.
-pub fn port_names() -> Vec<String> {
-    serialport::available_ports()
-        .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
-        .unwrap_or_default()
-}
+pub mod fake;
+pub mod fast;
+pub mod frame;
+pub mod radio;
+
+pub use fast::{Block, Info, Sums};
+pub use radio::{open, port_names, LinkError, Radio};

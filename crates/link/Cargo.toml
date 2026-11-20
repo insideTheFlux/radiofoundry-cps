@@ -1,6 +1,6 @@
 [package]
 name = "rfcps-link"
-description = "Serial link to a RadioFoundry radio: the CPS protocol"
+description = "Serial link to a RadioFoundry radio: the debug link and the fast codeplug protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,3 +8,5 @@ license.workspace = true
 [dependencies]
 rfcps-core = { path = "../core" }
 serialport = { version = "4", default-features = false }
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-decode", "safe-encode"] }
+crc32fast = "1"
