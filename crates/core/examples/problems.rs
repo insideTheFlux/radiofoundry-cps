@@ -8,10 +8,23 @@ use rfcps_core::{Codeplug, Image};
 
 fn main() {
     let path = std::env::args().nth(1).expect("usage: problems IMAGE.bin");
-    let cp = Codeplug::decode(&Image::from_bytes(&std::fs::read(path).expect("read image")));
+    let cp = Codeplug::decode(&Image::from_bytes(
+        &std::fs::read(path).expect("read image"),
+    ));
     let problems = validate(&cp, None);
     for p in &problems {
-        println!("{:<8} {:?} {:>4} {:<18} {}", if p.level == Level::Error { "error" } else { "warning" }, p.table, p.number.map_or(String::new(), |n| n.to_string()), p.item, p.message);
+        println!(
+            "{:<8} {:?} {:>4} {:<18} {}",
+            if p.level == Level::Error {
+                "error"
+            } else {
+                "warning"
+            },
+            p.table,
+            p.number.map_or(String::new(), |n| n.to_string()),
+            p.item,
+            p.message
+        );
     }
     println!("{} problems", problems.len());
 }

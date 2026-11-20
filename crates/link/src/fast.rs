@@ -184,3 +184,143 @@ impl<P: Read + Write> Radio<P> {
         Ok(img)
     }
 }
+
+// --- Writing ---
+
+const OP_BEGIN: u8 = 3;
+const OP_BLOCK: u8 = 4;
+const OP_DATA: u8 = 5;
+const OP_END: u8 = 6;
+const OP_COMMIT: u8 = 7;
+const OP_STATUS: u8 = 8;
+const OP_ABORT: u8 = 9;
+
+pub const STATE_COMMITTING: u8 = 3;
+pub const STATE_DONE: u8 = 4;
+
+/// Refusal reasons a resend can't fix: a block outside the image, storage that can't be written, no staging area,
+/// a full or busy staging area, a flash failure (cps-fast.md 6).
+const FINAL_REASONS: [u8; 6] = [1, 2, 3, 4, 5, 9];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Status {
+    pub state: u8,
+    pub mode: u8,
+    pub blocks: u16,
+    pub copied: u16,
+    pub reason: u8,
+}
+
+impl<P: Read + Write> Radio<P> {
+    /// Opens a write session: direct (each block written as it ends) or staged (all or none at COMMIT). Returns the
+    /// staging area's block count (0 for direct).
+    pub fn codeplug_begin(&mut self, staged: bool) -> Result<u16> {
+        let d = self.codeplug(OP_BEGIN, &[u8::from(staged)])?;
+        if d.len() < 2 {
+            return Err(LinkError::Protocol("BEGIN reply too short".into()));
+        }
+        Ok(rd16(&d, 0))
+    }
+
+    /// One block: BLOCK, the LZ4 stream in DATA pieces, END. A block that fails on the way (no answer, a corrupt
+    /// piece) is sent again from its start, up to three times; a refusal a resend can't fix is returned at once.
+    /// Returns the stream bytes sent.
+    pub fn codeplug_write_block(
+        &mut self,
+        addr: u32,
+        data: &[u8],
+        data_per_write: usize,
+    ) -> Result<usize> {
+        if data.len() != BLOCK {
+            return Err(LinkError::Protocol("a block is 4096 bytes".into()));
+        }
+        let blank = data.iter().all(|&b| b == 0xFF);
+        let stream = if blank {
+            Vec::new()
+        } else {
+            lz4_flex::block::compress(data)
+        };
+        let crc = crc32fast::hash(data);
+        let mut last = LinkError::Protocol("no attempt".into());
+        for _ in 0..3 {
+            match self.send_block(addr, blank, &stream, crc, data_per_write) {
+                Ok(()) => return Ok(stream.len()),
+                Err(LinkError::Status {
+                    status: 7,
+                    reason: Some(r),
+                }) if FINAL_REASONS.contains(&r) => {
+                    return Err(LinkError::Status {
+                        status: 7,
+                        reason: Some(r),
+                    })
+                }
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    fn send_block(
+        &mut self,
+        addr: u32,
+        blank: bool,
+        stream: &[u8],
+        crc: u32,
+        per: usize,
+    ) -> Result<()> {
+        let mut h = le32(addr).to_vec();
+        h.push(if blank { FORMAT_BLANK } else { FORMAT_LZ4 });
+        h.extend_from_slice(&(stream.len() as u16).to_le_bytes());
+        h.extend_from_slice(&le32(crc));
+        self.codeplug(OP_BLOCK, &h)?;
+        for (i, piece) in stream.chunks(per).enumerate() {
+            let mut d = ((i * per) as u16).to_le_bytes().to_vec();
+            d.extend_from_slice(piece);
+            self.codeplug(OP_DATA, &d)?;
+        }
+        // END writes the flash: allow it more time than a read
+        let keep = self.timeout;
+        self.timeout = std::time::Duration::from_secs(5);
+        let r = self.codeplug(OP_END, &[]);
+        self.timeout = keep;
+        r.map(|_| ())
+    }
+
+    pub fn codeplug_status(&mut self) -> Result<Status> {
+        let d = self.codeplug(OP_STATUS, &[])?;
+        if d.len() < 7 {
+            return Err(LinkError::Protocol("STATUS reply too short".into()));
+        }
+        Ok(Status {
+            state: d[0],
+            mode: d[1],
+            blocks: rd16(&d, 2),
+            copied: rd16(&d, 4),
+            reason: d[6],
+        })
+    }
+
+    /// Ends the session. A staged session copies its blocks in now; this waits until it is done.
+    pub fn codeplug_commit(&mut self, wait: std::time::Duration) -> Result<()> {
+        self.codeplug(OP_COMMIT, &[])?;
+        let end = std::time::Instant::now() + wait;
+        loop {
+            let s = self.codeplug_status()?;
+            if s.state == STATE_DONE {
+                return Ok(());
+            }
+            if s.state != STATE_COMMITTING || std::time::Instant::now() > end {
+                return Err(LinkError::Protocol(format!(
+                    "the commit did not finish (state {}, reason {})",
+                    s.state, s.reason
+                )));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// Ends the session without committing.
+    pub fn codeplug_abort(&mut self) -> Result<()> {
+        self.codeplug(OP_ABORT, &[]).map(|_| ())
+    }
+}

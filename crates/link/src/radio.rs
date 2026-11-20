@@ -19,6 +19,10 @@ pub enum LinkError {
     },
     /// A reply that makes no sense (a length, a CRC, a stream that does not decode).
     Protocol(String),
+    /// The radio's codeplug is not what it was when it was read, so a write would overwrite someone's change.
+    RadioChanged(usize),
+    /// A write finished but reading the radio back gave something else.
+    VerifyFailed(usize),
 }
 
 impl std::fmt::Display for LinkError {
@@ -35,6 +39,8 @@ impl std::fmt::Display for LinkError {
                 reason: Some(r),
             } => write!(f, "the radio refused (status {status}, reason {r})"),
             LinkError::Protocol(m) => write!(f, "unexpected reply: {m}"),
+            LinkError::RadioChanged(n) => write!(f, "the radio's codeplug has changed since it was read ({n} blocks differ); read it again"),
+            LinkError::VerifyFailed(n) => write!(f, "the radio does not hold what was written ({n} blocks differ)"),
         }
     }
 }
@@ -76,6 +82,11 @@ impl<P: Read + Write> Radio<P> {
 
     pub fn into_inner(self) -> P {
         self.port
+    }
+
+    /// The port, for a test to reach the software radio behind it.
+    pub fn port_mut(&mut self) -> &mut P {
+        &mut self.port
     }
 
     /// Sends one command and returns the reply payload after its status byte.
