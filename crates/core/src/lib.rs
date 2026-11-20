@@ -9,6 +9,7 @@ pub mod fields;
 pub mod freqs;
 pub mod image;
 pub mod model;
+pub mod problems;
 pub mod records;
 
 pub use image::Image;
