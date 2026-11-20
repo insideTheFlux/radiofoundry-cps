@@ -52,6 +52,8 @@ struct App {
     doc_serial: u64,
     show_problems: bool,
     notice: Option<(String, Vec<String>)>,
+    /// Asking whether to throw away unsaved edits for a new codeplug.
+    confirm_new: bool,
     /// The green or red bar under the toolbar after a write; the x closes it.
     banner: Option<(bool, String)>,
 }
@@ -83,6 +85,7 @@ impl App {
             doc_serial: 0,
             show_problems: true,
             notice: None,
+            confirm_new: false,
             banner: None,
         }
     }
@@ -147,6 +150,29 @@ impl App {
         self.progress = (0, 0);
         self.reading = Some(worker::read_radio(self.port.clone(), ctx.clone()));
         self.status = format!("Reading {}…", self.port);
+    }
+
+    /// An empty codeplug to fill in. It did not come from the radio, so writing it replaces what the radio holds.
+    fn new_codeplug(&mut self) {
+        let mut d = Doc::from_image(Image::blank(), "new codeplug".to_string());
+        d.from_file = true;
+        self.doc = Some(d);
+        self.doc_serial += 1;
+        self.zone = 0;
+        self.channel = None;
+        self.contact = None;
+        self.list = 0;
+        self.banner = None;
+        self.status = "A new, empty codeplug.".into();
+    }
+
+    fn ask_new(&mut self) {
+        let unsaved = self.doc.as_mut().is_some_and(|d| d.unsaved());
+        if unsaved {
+            self.confirm_new = true;
+        } else {
+            self.new_codeplug();
+        }
     }
 
     fn open_dialog(&mut self) {
@@ -388,6 +414,9 @@ impl App {
                 }
             }
             ui.separator();
+            if ui.button("New").clicked() {
+                self.ask_new();
+            }
             if ui.button("Open image…").clicked() {
                 self.open_dialog();
             }
@@ -487,6 +516,10 @@ impl App {
                     self.open_dialog();
                 }
             });
+            ui.add_space(10.0);
+            if ui.link("Start a new, empty codeplug").clicked() {
+                self.new_codeplug();
+            }
             ui.add_space(16.0);
             if self.port.is_empty() {
                 ui.colored_label(
@@ -536,6 +569,30 @@ impl eframe::App for App {
             });
             if close || m.should_close() {
                 self.notice = None;
+            }
+        }
+        if self.confirm_new {
+            let (mut go, mut cancel) = (false, false);
+            let m = egui::Modal::new(egui::Id::unique("confirm_new")).show(ui.ctx(), |ui| {
+                ui.set_width(440.0);
+                ui.heading("Start a new codeplug?");
+                ui.add_space(6.0);
+                ui.label("The edits in this codeplug have not been saved to a file or written to the radio. A new codeplug replaces it.");
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add(theme::primary(ui, "Start new", 15.0)).clicked() {
+                        go = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+            if go {
+                self.new_codeplug();
+            }
+            if go || cancel || m.should_close() {
+                self.confirm_new = false;
             }
         }
         let ctx = ui.ctx().clone();

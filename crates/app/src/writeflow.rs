@@ -77,7 +77,7 @@ impl Flow {
                     ui.label("First, the radio's current codeplug is saved as a backup. Then only the changed blocks are written, and the radio is read back to check them.");
                     ui.add_space(8.0);
                     if *from_file {
-                        ui.label("This codeplug comes from a file. The radio's codeplug will be replaced by it: whatever differs on the radio is overwritten (only those blocks are written).");
+                        ui.label("This codeplug was not read from the radio (it is from a file, or new). The radio's codeplug will be replaced by it: whatever differs on the radio is overwritten (only those blocks are written).");
                     } else if changes.is_empty() {
                         ui.label("No records changed.");
                     } else {
