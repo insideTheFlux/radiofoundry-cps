@@ -176,7 +176,7 @@ impl App {
             let img = d.encoded();
             match std::fs::write(&path, img.bytes()) {
                 Ok(()) => {
-                    d.mark_saved();
+                    d.mark_file_saved();
                     self.status = format!("Saved {}.", path.display());
                 }
                 Err(e) => self.status = format!("Could not save {}: {e}", path.display()),
@@ -566,7 +566,7 @@ impl eframe::App for App {
                             .file_name()
                             .map_or_else(|| d.source.clone(), |n| n.to_string_lossy().into_owned()),
                     );
-                    if d.dirty() {
+                    if d.unsaved() {
                         ui.colored_label(theme::palette(ui).warn, "Unsaved changes");
                     } else {
                         ui.label(egui::RichText::new("No unsaved changes").color(theme::palette(ui).muted));

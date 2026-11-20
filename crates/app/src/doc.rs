@@ -20,11 +20,16 @@ pub struct Doc {
     /// Bumped on every edit, undo and redo.
     pub generation: u64,
     dirty_at: Option<(u64, bool)>,
+    /// The image last saved to a file (or written to the radio): what "unsaved changes" is measured against. The
+    /// write to the radio is measured against `base` instead, so saving a file never switches the write off.
+    saved: Image,
+    unsaved_at: Option<(u64, bool)>,
 }
 
 impl Doc {
     pub fn from_image(image: Image, source: String) -> Self {
         let cp = Codeplug::decode(&image);
+        let base_copy = image.clone();
         Self {
             source,
             base: image,
@@ -34,6 +39,8 @@ impl Doc {
             last_push: None,
             generation: 0,
             dirty_at: None,
+            saved: base_copy,
+            unsaved_at: None,
         }
     }
 
@@ -97,10 +104,30 @@ impl Doc {
         d
     }
 
-    /// After the image has been saved or written: the edited image becomes the base.
+    /// Whether the edits are not in a saved file (or the radio) yet.
+    pub fn unsaved(&mut self) -> bool {
+        if let Some((g, d)) = self.unsaved_at {
+            if g == self.generation {
+                return d;
+            }
+        }
+        let d = self.encoded().bytes() != self.saved.bytes();
+        self.unsaved_at = Some((self.generation, d));
+        d
+    }
+
+    /// After the image was written to the radio: the edited image becomes the base, and counts as saved.
     pub fn mark_saved(&mut self) {
         self.base = self.encoded();
+        self.saved = self.base.clone();
         self.dirty_at = None;
+        self.unsaved_at = None;
+    }
+
+    /// After the image was saved to a file. The radio still holds the old image, so the base stays as it is.
+    pub fn mark_file_saved(&mut self) {
+        self.saved = self.encoded();
+        self.unsaved_at = None;
     }
 }
 
@@ -186,5 +213,17 @@ mod tests {
         d.note(before, None);
         assert!(n > 0, "no weather channels found");
         assert!(d.dirty(), "the edit did not make the document dirty");
+    }
+
+    #[test]
+    fn saving_a_file_does_not_switch_off_the_write_to_the_radio() {
+        let mut d = doc();
+        add_contact(&mut d, None);
+        assert!(d.dirty() && d.unsaved());
+        d.mark_file_saved();
+        assert!(d.dirty(), "the radio still lacks the edit");
+        assert!(!d.unsaved());
+        d.mark_saved();
+        assert!(!d.dirty() && !d.unsaved());
     }
 }
