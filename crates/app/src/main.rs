@@ -319,7 +319,11 @@ impl eframe::App for App {
                 ui.label(&self.status);
                 if let Some(d) = &mut self.doc {
                     ui.separator();
-                    ui.label(&d.source);
+                    ui.label(
+                        std::path::Path::new(&d.source)
+                            .file_name()
+                            .map_or_else(|| d.source.clone(), |n| n.to_string_lossy().into_owned()),
+                    );
                     if d.dirty() {
                         ui.colored_label(
                             egui::Color32::from_rgb(210, 140, 30),

@@ -36,15 +36,18 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
     });
     ui.add_space(4.0);
     let mut delete: Option<usize> = None;
+    let height = ui.available_height();
     TableBuilder::new(ui)
         .striped(true)
         .resizable(true)
-        .column(Column::auto().at_least(34.0))
-        .column(Column::auto().at_least(150.0))
-        .column(Column::auto().at_least(90.0))
-        .column(Column::auto().at_least(80.0))
-        .column(Column::auto().at_least(70.0))
-        .column(Column::auto().at_least(50.0))
+        .max_scroll_height(height)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::exact(44.0))
+        .column(Column::exact(190.0))
+        .column(Column::exact(110.0))
+        .column(Column::exact(100.0))
+        .column(Column::exact(92.0))
+        .column(Column::exact(70.0))
         .header(22.0, |mut h| {
             for t in ["#", "Name", "DMR ID", "Type", "Time slot", ""] {
                 h.col(|ui| {
@@ -61,7 +64,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
                     ui.label(n.to_string());
                 });
                 row.col(|ui| {
-                    name_edit(ui, &mut c.name, 16, 140.0);
+                    name_edit(ui, &mut c.name, 16, 176.0);
                 });
                 row.col(|ui| {
                     ui.add_enabled(
