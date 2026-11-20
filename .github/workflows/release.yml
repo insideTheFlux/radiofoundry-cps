@@ -19,7 +19,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: dist/*.tar.gz dist/*.deb
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
   windows:
     runs-on: windows-latest
     steps:
