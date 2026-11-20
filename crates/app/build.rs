@@ -10,7 +10,7 @@ fn main() {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("../../packaging/rfcps.ico");
         res.set("ProductName", "RadioFoundry CPS");
-        res.set("FileDescription", "RadioFoundry codeplug editor");
+        res.set("FileDescription", "RadioFoundry CPS");
         if let Err(e) = res.compile() {
             println!("cargo:warning=could not embed the icon: {e}");
         }
