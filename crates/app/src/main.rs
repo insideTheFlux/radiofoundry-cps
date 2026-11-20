@@ -10,10 +10,12 @@ mod general;
 mod theme;
 mod widgets;
 mod worker;
+mod writeflow;
 mod zones;
 
 use doc::Doc;
 use eframe::egui;
+use rfcps_core::problems::{self, Level, Problem, Table};
 use rfcps_core::Image;
 use rfcps_link::PortInfo;
 use std::sync::mpsc::Receiver;
@@ -38,6 +40,11 @@ struct App {
     tab: Tab,
     zone: usize,
     channel: Option<u16>,
+    flow: writeflow::Flow,
+    problems: Vec<Problem>,
+    problems_key: (u64, u64),
+    doc_serial: u64,
+    show_problems: bool,
 }
 
 impl App {
@@ -59,11 +66,17 @@ impl App {
             tab: Tab::Channels,
             zone: 0,
             channel: None,
+            flow: writeflow::Flow::new(),
+            problems: Vec::new(),
+            problems_key: (u64::MAX, u64::MAX),
+            doc_serial: 0,
+            show_problems: true,
         }
     }
 
     fn open_image(&mut self, bytes: &[u8], source: String) {
         self.doc = Some(Doc::from_image(Image::from_bytes(bytes), source));
+        self.doc_serial += 1;
         self.zone = 0;
     }
 
@@ -82,6 +95,7 @@ impl App {
                 Ok(img) => {
                     let n = img.len();
                     self.doc = Some(Doc::from_image(img, format!("radio on {}", self.port)));
+                    self.doc_serial += 1;
                     self.zone = 0;
                     self.status = format!("Read the codeplug from {} ({} bytes).", self.port, n);
                 }
@@ -204,8 +218,31 @@ impl App {
             {
                 self.start_read(&ui.ctx().clone());
             }
-            ui.add_enabled(false, egui::Button::new("Write to radio"))
-                .on_disabled_hover_text("Writing to a radio comes next.");
+            let errors = problems::error_count(&self.problems);
+            let dirty = self.doc.as_mut().is_some_and(|d| d.dirty());
+            let can_write = self.doc.is_some()
+                && errors == 0
+                && dirty
+                && !busy
+                && !self.flow.busy()
+                && !self.port.is_empty();
+            let why = if self.doc.is_none() {
+                "Read from a radio or open an image first."
+            } else if errors > 0 {
+                "Fix the errors in the Problems list first."
+            } else if !dirty {
+                "Nothing has changed since the codeplug was read."
+            } else {
+                "Choose the radio's port first."
+            };
+            let write = ui
+                .add_enabled(can_write, egui::Button::new("Write to radio"))
+                .on_disabled_hover_text(why);
+            if write.clicked() {
+                if let Some(d) = &self.doc {
+                    self.flow.request(d);
+                }
+            }
             ui.separator();
             if ui.button("Open image…").clicked() {
                 self.open_dialog();
@@ -290,6 +327,21 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_read();
+        if let Some(d) = &self.doc {
+            let key = (self.doc_serial, d.generation);
+            if key != self.problems_key {
+                self.problems = problems::validate(&d.cp, None);
+                self.problems_key = key;
+            }
+        } else {
+            self.problems.clear();
+            self.problems_key = (u64::MAX, u64::MAX);
+        }
+        let ctx = ui.ctx().clone();
+        let port = self.port.clone();
+        if let Some(msg) = self.flow.show(&ctx, &port, self.doc.as_mut()) {
+            self.status = msg;
+        }
         // Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) outside a text field
         let (z, y, shift) = ui.input(|i| {
             (
@@ -326,12 +378,95 @@ impl eframe::App for App {
                     if d.dirty() {
                         ui.colored_label(theme::palette(ui).warn, "edited, not saved");
                     }
+                    let (e, w) = (
+                        problems::error_count(&self.problems),
+                        self.problems
+                            .iter()
+                            .filter(|p| p.level == Level::Warning)
+                            .count(),
+                    );
+                    let p = theme::palette(ui);
+                    let text = if e + w == 0 {
+                        "No problems".to_string()
+                    } else {
+                        format!("{e} error(s), {w} warning(s)")
+                    };
+                    let colour = if e > 0 {
+                        p.bad
+                    } else if w > 0 {
+                        p.warn
+                    } else {
+                        p.ok
+                    };
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new(text).color(colour)).small())
+                        .on_hover_text("Show or hide the Problems list")
+                        .clicked()
+                    {
+                        self.show_problems = !self.show_problems;
+                    }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     egui::widgets::global_theme_preference_buttons(ui);
                 });
             });
         });
+        if self.show_problems && !self.problems.is_empty() {
+            let mut jump: Option<(Table, Option<u16>)> = None;
+            egui::Panel::bottom("problems")
+                .resizable(true)
+                .default_size(140.0)
+                .show(ui, |ui| {
+                    let p = theme::palette(ui);
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("Problems").strong().color(p.accent));
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for pr in &self.problems {
+                                let (mark, colour) = if pr.level == Level::Error {
+                                    ("error", p.bad)
+                                } else {
+                                    ("warning", p.warn)
+                                };
+                                let place = match (pr.table, pr.number) {
+                                    (Table::General, _) => "General".to_string(),
+                                    (t, Some(n)) => format!(
+                                        "{} {n}{}",
+                                        problem_table(t),
+                                        if pr.item.is_empty() {
+                                            String::new()
+                                        } else {
+                                            format!(" {}", pr.item)
+                                        }
+                                    ),
+                                    (t, None) => problem_table(t).to_string(),
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(colour, mark);
+                                    if ui.link(format!("{place}: {}", pr.message)).clicked() {
+                                        jump = Some((pr.table, pr.number));
+                                    }
+                                });
+                            }
+                        });
+                });
+            if let Some((t, n)) = jump {
+                match t {
+                    Table::Channels => {
+                        self.tab = Tab::Channels;
+                        self.channel = n;
+                    }
+                    Table::Zones => {
+                        self.tab = Tab::Zones;
+                        self.zone = n.map_or(0, |n| usize::from(n).saturating_sub(1));
+                    }
+                    Table::Contacts => self.tab = Tab::Contacts,
+                    Table::General => self.tab = Tab::General,
+                    Table::RxLists => {}
+                }
+            }
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             if self.doc.is_none() {
                 self.welcome(ui);
@@ -382,4 +517,14 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(App::new()))
         }),
     )
+}
+
+fn problem_table(t: Table) -> &'static str {
+    match t {
+        Table::General => "General",
+        Table::Channels => "Channel",
+        Table::Zones => "Zone",
+        Table::Contacts => "Contact",
+        Table::RxLists => "RX group list",
+    }
 }
