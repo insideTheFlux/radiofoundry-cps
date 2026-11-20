@@ -8,6 +8,7 @@ mod contacts;
 mod doc;
 mod exchange;
 mod general;
+mod lists;
 mod theme;
 mod widgets;
 mod worker;
@@ -27,6 +28,7 @@ enum Tab {
     Channels,
     Zones,
     Contacts,
+    Lists,
     General,
 }
 
@@ -41,6 +43,8 @@ struct App {
     tab: Tab,
     zone: usize,
     channel: Option<u16>,
+    contact: Option<u16>,
+    list: usize,
     flow: writeflow::Flow,
     problems: Vec<Problem>,
     problems_key: (u64, u64),
@@ -68,6 +72,8 @@ impl App {
             tab: Tab::Channels,
             zone: 0,
             channel: None,
+            contact: None,
+            list: 0,
             flow: writeflow::Flow::new(),
             problems: Vec::new(),
             problems_key: (u64::MAX, u64::MAX),
@@ -616,9 +622,23 @@ impl eframe::App for App {
                         self.tab = Tab::Zones;
                         self.zone = n.map_or(0, |n| usize::from(n).saturating_sub(1));
                     }
-                    Table::Contacts => self.tab = Tab::Contacts,
+                    Table::Contacts => {
+                        self.tab = Tab::Contacts;
+                        self.contact = n;
+                    }
                     Table::General => self.tab = Tab::General,
-                    Table::RxLists => {}
+                    Table::RxLists => {
+                        self.tab = Tab::Lists;
+                        self.list = self
+                            .doc
+                            .as_ref()
+                            .and_then(|d| {
+                                d.cp.rx_lists
+                                    .iter()
+                                    .position(|l| Some(u16::from(l.number)) == n)
+                            })
+                            .unwrap_or(0);
+                    }
                 }
             }
         }
@@ -632,6 +652,7 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.tab, Tab::Channels, "Channels");
                 ui.selectable_value(&mut self.tab, Tab::Zones, "Zones");
                 ui.selectable_value(&mut self.tab, Tab::Contacts, "Contacts");
+                ui.selectable_value(&mut self.tab, Tab::Lists, "RX Group Lists");
                 ui.selectable_value(&mut self.tab, Tab::General, "General");
             });
             ui.separator();
@@ -639,7 +660,8 @@ impl eframe::App for App {
             match self.tab {
                 Tab::Channels => channels::show(ui, &mut doc.cp, &mut self.channel),
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
-                Tab::Contacts => contacts::show(ui, &mut doc.cp),
+                Tab::Contacts => contacts::show(ui, &mut doc.cp, &mut self.contact),
+                Tab::Lists => lists::show(ui, &mut doc.cp, &mut self.list),
                 Tab::General => general::show(ui, &mut doc.cp),
             }
             let focus = ui.memory(|m| m.focused());

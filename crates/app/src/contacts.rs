@@ -1,13 +1,24 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 insideTheFlux
 
-use crate::widgets::name_edit;
+//! The Contacts tab: a table of talkgroups, private calls and the all call.
+
+use crate::theme;
+use crate::widgets::{checked_text, name_edit};
 use eframe::egui::{self, Ui};
 use egui_extras::{Column, TableBuilder};
 use rfcps_core::records::{CallType, Contact, MAX_CONTACTS};
 use rfcps_core::Codeplug;
 
-pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
+fn type_label(t: CallType) -> &'static str {
+    match t {
+        CallType::Group => "Group",
+        CallType::Private => "Private",
+        CallType::All => "All",
+    }
+}
+
+pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
     ui.horizontal(|ui| {
         if ui
             .add_enabled(
@@ -26,66 +37,93 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
                     call_type: CallType::Group,
                     timeslot: 0,
                 });
+                *selected = Some(number);
             }
         }
-        ui.label(format!(
-            "{} of {} contacts",
-            cp.contacts.len(),
-            MAX_CONTACTS
-        ));
+        if ui
+            .add_enabled(selected.is_some(), egui::Button::new("Delete contact"))
+            .clicked()
+        {
+            if let Some(number) = selected.take() {
+                cp.contacts.retain(|c| c.number != number);
+                for c in &mut cp.channels {
+                    if c.contact == number {
+                        c.contact = 0;
+                    }
+                }
+                for l in &mut cp.rx_lists {
+                    l.contacts.retain(|&n| n != number);
+                }
+            }
+        }
+        ui.label(
+            egui::RichText::new(format!(
+                "{} of {} contacts",
+                cp.contacts.len(),
+                MAX_CONTACTS
+            ))
+            .color(theme::palette(ui).muted),
+        );
     });
     ui.add_space(4.0);
-    let mut delete: Option<usize> = None;
     let height = ui.available_height();
     TableBuilder::new(ui)
         .striped(true)
-        .resizable(true)
+        .resizable(false)
+        .sense(egui::Sense::click())
         .max_scroll_height(height)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(44.0))
+        .column(Column::exact(46.0))
         .column(Column::exact(190.0))
-        .column(Column::exact(110.0))
+        .column(Column::exact(120.0))
         .column(Column::exact(100.0))
         .column(Column::exact(92.0))
-        .column(Column::exact(70.0))
-        .header(22.0, |mut h| {
-            for t in ["#", "Name", "DMR ID", "Type", "Time slot", ""] {
+        .header(24.0, |mut h| {
+            for t in ["#", "Name", "DMR ID", "Call Type", "Timeslot"] {
                 h.col(|ui| {
                     ui.strong(t);
                 });
             }
         })
         .body(|body| {
-            body.rows(24.0, cp.contacts.len(), |mut row| {
+            body.rows(26.0, cp.contacts.len(), |mut row| {
                 let i = row.index();
+                let n = cp.contacts[i].number;
+                row.set_selected(*selected == Some(n));
                 let c = &mut cp.contacts[i];
-                let n = c.number;
+                let mut hit = false;
                 row.col(|ui| {
                     ui.label(n.to_string());
                 });
                 row.col(|ui| {
-                    name_edit(ui, &mut c.name, 16, 176.0);
+                    hit |= name_edit(ui, &mut c.name, 16, 176.0).gained_focus();
                 });
                 row.col(|ui| {
-                    ui.add_enabled(
-                        c.call_type != CallType::All,
-                        egui::DragValue::new(&mut c.id).range(1..=16_777_215),
-                    );
+                    let id = ui.scope_id().with(("cid", n));
+                    ui.add_enabled_ui(c.call_type != CallType::All, |ui| {
+                        let (r, v) = checked_text(ui, id, c.id.to_string(), 100.0, |s| {
+                            s.trim()
+                                .parse::<u32>()
+                                .ok()
+                                .filter(|v| (1..=16_777_215).contains(v))
+                        });
+                        hit |= r.gained_focus();
+                        if let Some(v) = v {
+                            c.id = v;
+                        }
+                    });
                 });
                 row.col(|ui| {
-                    let label = |t| match t {
-                        CallType::Group => "Group",
-                        CallType::Private => "Private",
-                        CallType::All => "All call",
-                    };
-                    egui::ComboBox::from_id_salt(("ctype", n))
-                        .selected_text(label(c.call_type))
-                        .width(70.0)
+                    hit |= egui::ComboBox::from_id_salt(("ctype", n))
+                        .selected_text(type_label(c.call_type))
+                        .width(80.0)
                         .show_ui(ui, |ui| {
                             for t in [CallType::Group, CallType::Private, CallType::All] {
-                                ui.selectable_value(&mut c.call_type, t, label(t));
+                                ui.selectable_value(&mut c.call_type, t, type_label(t));
                             }
-                        });
+                        })
+                        .response
+                        .clicked();
                 });
                 row.col(|ui| {
                     let t = |v: u8| {
@@ -95,32 +133,20 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
                             v.to_string()
                         }
                     };
-                    egui::ComboBox::from_id_salt(("cts", n))
+                    hit |= egui::ComboBox::from_id_salt(("cts", n))
                         .selected_text(t(c.timeslot))
-                        .width(60.0)
+                        .width(70.0)
                         .show_ui(ui, |ui| {
                             for v in 0..=2u8 {
                                 ui.selectable_value(&mut c.timeslot, v, t(v));
                             }
-                        });
+                        })
+                        .response
+                        .clicked();
                 });
-                row.col(|ui| {
-                    if ui.small_button("Delete").clicked() {
-                        delete = Some(i);
-                    }
-                });
+                if hit || row.response().clicked() {
+                    *selected = Some(n);
+                }
             });
         });
-    if let Some(i) = delete {
-        let number = cp.contacts[i].number;
-        cp.contacts.remove(i);
-        for c in &mut cp.channels {
-            if c.contact == number {
-                c.contact = 0;
-            }
-        }
-        for l in &mut cp.rx_lists {
-            l.contacts.retain(|&n| n != number);
-        }
-    }
 }
