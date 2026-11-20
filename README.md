@@ -12,8 +12,8 @@ Private project for now. Anything ported from RadioFoundry keeps its MIT notice 
   checks) and the web editor's look, light or dark.
 - Writes to the radio safely: a list of what will change, a backup of the radio's codeplug first, only the changed
   blocks, a refusal if the radio changed since it was read, and a read-back check.
-- Imports a stock DM-32UV backup (the web installer's `.zip`), CHIRP CSV and CSV tables; exports CSV tables and CHIRP CSV.
-  CSV and CHIRP files are the web editor's: they work in both editors.
+- Imports a stock DM-32UV backup (the web installer's `.zip`), qdmr YAML codeplugs, CHIRP CSV and CSV tables; exports qdmr YAML, CSV tables and CHIRP CSV.
+  CSV, CHIRP and qdmr files are the web editor's: they work in both editors.
 
 ## Run
 
@@ -39,7 +39,7 @@ program makes SmartScreen ask "Run anyway?" once.
 
 | Crate | Holds |
 |---|---|
-| `rfcps-core` | the codeplug as data: the image format, validation, diff, CSV, CHIRP and the stock DM-32UV import. No I/O |
+| `rfcps-core` | the codeplug as data: the image format, validation, diff, CSV, CHIRP, qdmr YAML and the stock DM-32UV import. No I/O |
 | `rfcps-link` | the serial link: the debug link's frames, the fast codeplug read and write, and a software radio for tests |
 | `rfcps` | the window |
 
