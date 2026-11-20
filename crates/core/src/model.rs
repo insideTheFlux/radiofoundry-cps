@@ -8,7 +8,7 @@
 use crate::image::Image;
 use crate::records::*;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Codeplug {
     pub general: General,
     pub channels: Vec<Channel>,
