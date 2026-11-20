@@ -2050,7 +2050,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "rfcps"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "eframe",
  "egui_extras",
@@ -2063,14 +2063,14 @@ dependencies = [
 
 [[package]]
 name = "rfcps-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "rfcps-link"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "crc32fast",
  "lz4_flex",
