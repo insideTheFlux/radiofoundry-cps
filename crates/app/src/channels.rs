@@ -9,7 +9,7 @@ use crate::widgets::{checked_text, freq_edit, name_edit};
 use eframe::egui::{self, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
 use rfcps_core::fields::parse_tone;
-use rfcps_core::freqs::{listen_band, set_rx, set_tx};
+use rfcps_core::freqs::{listen_band, set_rx, set_tx, ListenBand};
 use rfcps_core::records::{Channel, Mode, MAX_CHANNELS};
 use rfcps_core::Codeplug;
 
@@ -216,15 +216,31 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
         });
 }
 
+/// The mode as the radio shows it: an FM channel in the air band is received in AM (the web editor says the same).
 fn mode_combo(ui: &mut Ui, c: &mut Channel, salt: (&str, u16)) -> egui::Response {
-    egui::ComboBox::from_id_salt(salt)
-        .selected_text(if c.mode == Mode::Dmr { "DMR" } else { "FM" })
+    let band = if c.mode == Mode::Fm { listen_band(c.rx_hz) } else { None };
+    let shown = match (c.mode, band) {
+        (Mode::Dmr, _) => "DMR",
+        (_, Some(ListenBand::Air)) => "AM",
+        _ => "FM",
+    };
+    let r = egui::ComboBox::from_id_salt(salt)
+        .selected_text(shown)
         .width(58.0)
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut c.mode, Mode::Fm, "FM");
             ui.selectable_value(&mut c.mode, Mode::Dmr, "DMR");
         })
-        .response
+        .response;
+    match band {
+        Some(ListenBand::Air) => r.on_hover_text(
+            "AM (air band): received in AM, receive only. The channel is set to FM; the radio receives this band in AM.",
+        ),
+        Some(ListenBand::Broadcast) => {
+            r.on_hover_text("FM broadcast band: receive only.")
+        }
+        None => r,
+    }
 }
 
 fn power_combo(ui: &mut Ui, c: &mut Channel, salt: (&str, u16)) -> egui::Response {
