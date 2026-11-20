@@ -925,14 +925,14 @@ pub fn import_table(
                     skipped: false,
                 });
             }
-            return Ok(ImportResult {
+            Ok(ImportResult {
                 table: t,
                 added,
                 updated,
                 removed: gone.len(),
                 problems,
                 unknown,
-            });
+            })
         }
         TableKind::RxLists => {
             let pool = pool_contacts(cp);
@@ -1046,14 +1046,14 @@ pub fn import_table(
                     }
                 }
             }
-            return Ok(ImportResult {
+            Ok(ImportResult {
                 table: t,
                 added,
                 updated,
                 removed: gone.len(),
                 problems,
                 unknown,
-            });
+            })
         }
         TableKind::Channels => {
             let old = cp.channels.clone();
@@ -1190,14 +1190,14 @@ pub fn import_table(
                     skipped: false,
                 });
             }
-            return Ok(ImportResult {
+            Ok(ImportResult {
                 table: t,
                 added,
                 updated,
                 removed: gone.len(),
                 problems,
                 unknown,
-            });
+            })
         }
         TableKind::Zones => {
             let pool = pool_channels(cp);
