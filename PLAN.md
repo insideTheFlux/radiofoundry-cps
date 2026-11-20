@@ -5,7 +5,7 @@ A native editor for RadioFoundry radios: Windows 11 (x86-64) `.exe` and Ubuntu/L
 no browser, no Python. First radio: DM-32UV.
 
 ## Next, in order
-1. **Write test from Windows.** The same safe rename and revert as on Linux, with the radio's codeplug saved first. The Windows build (from GitHub Actions) has read the DM-32UV over COM3; a write has not been tried there.
+1. **Write test from Windows. Done (2026-11-20).** On Windows 11, with the build from GitHub Actions, over COM3 (CH340): a channel rename and the revert, one block each, read back and verified; the radio's screen showed the new name; a final read was byte for byte the same as the one before (1,179,648 bytes, 0 differ).
 2. **qdmr YAML, open and save.** What the web editor does (`site/static/js/codeplug/yaml.js`, spec `docs/spec/qdmr-yaml.md`): open a qdmr codeplug, save one with a dated name, and list what qdmr's format can't hold (SFR settings, power levels qdmr has no name for). Ported only from the web editor's code and the RadioFoundry spec, never from qdmr's source (GPL); checked byte for byte against the web editor on real files, with the golden tests gated by environment variables so no private data is in the repo.
 3. CHIRP images (`.img`), only if there is a need for them.
 
