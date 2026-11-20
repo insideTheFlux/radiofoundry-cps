@@ -8,8 +8,8 @@ use crate::theme;
 use crate::widgets::{checked_text, freq_edit, name_edit};
 use eframe::egui::{self, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
-use rfcps_core::bandplan::{self, listen_band, Region};
 use rfcps_core::fields::parse_tone;
+use rfcps_core::freqs::{listen_band, set_rx, set_tx};
 use rfcps_core::records::{Channel, Mode, MAX_CHANNELS};
 use rfcps_core::Codeplug;
 
@@ -50,7 +50,7 @@ struct Choices {
     lists: Vec<(u8, String)>,
 }
 
-pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, region: Region) {
+pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
     ui.horizontal(|ui| {
         if ui
             .add_enabled(
@@ -109,18 +109,12 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, region: 
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .show(ui, |ui| detail(ui, cp, selected, region, &choices));
+                .show(ui, |ui| detail(ui, cp, selected, &choices));
         });
-    egui::CentralPanel::default().show(ui, |ui| table(ui, cp, selected, region, &choices));
+    egui::CentralPanel::default().show(ui, |ui| table(ui, cp, selected, &choices));
 }
 
-fn table(
-    ui: &mut Ui,
-    cp: &mut Codeplug,
-    selected: &mut Option<u16>,
-    region: Region,
-    choices: &Choices,
-) {
+fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &Choices) {
     let height = ui.available_height();
     egui::ScrollArea::horizontal()
         .auto_shrink([false, false])
@@ -177,7 +171,7 @@ fn table(
                                 freq_edit(ui, ui.scope_id().with(("rx_hz", number)), c.rx_hz, true);
                             hit |= r.gained_focus();
                             if let Some(v) = v {
-                                bandplan::set_rx(region, c, v);
+                                set_rx(c, v);
                             }
                             let _ = listen;
                         });
@@ -190,7 +184,7 @@ fn table(
                             );
                             hit |= r.gained_focus();
                             if let Some(v) = v {
-                                bandplan::set_tx(region, c, v);
+                                set_tx(c, v);
                             }
                         });
                         row.col(|ui| {
@@ -299,13 +293,7 @@ fn group(ui: &mut Ui, title: &str) {
     ui.separator();
 }
 
-fn detail(
-    ui: &mut Ui,
-    cp: &mut Codeplug,
-    selected: &mut Option<u16>,
-    region: Region,
-    choices: &Choices,
-) {
+fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &Choices) {
     let Some(i) = selected.and_then(|n| cp.channels.iter().position(|c| c.number == n)) else {
         ui.add_space(20.0);
         ui.label(RichText::new("Select a channel to edit it.").color(theme::palette(ui).muted));
@@ -333,7 +321,7 @@ fn detail(
             ui.label("RX MHz");
             let (_, v) = freq_edit(ui, egui::Id::unique(("d_rx", number)), c.rx_hz, true);
             if let Some(v) = v {
-                bandplan::set_rx(region, c, v);
+                set_rx(c, v);
             }
             ui.end_row();
             ui.label("TX MHz");
@@ -344,26 +332,18 @@ fn detail(
                 listen.is_none(),
             );
             if let Some(v) = v {
-                bandplan::set_tx(region, c, v);
+                set_tx(c, v);
             }
             ui.end_row();
         });
     let p = theme::palette(ui);
-    let off = c.tx_hz as i64 - c.rx_hz as i64;
-    let note = if listen.is_some() {
-        "Listen-only band: the radio receives here, and TX follows RX.".to_string()
-    } else if off == 0 {
-        "Simplex.".to_string()
-    } else if bandplan::tx_for_rx(region, c.rx_hz) == Some(c.tx_hz) {
-        format!(
-            "Offset {:+.3} MHz, the standard for this band ({}).",
-            off as f64 / 1e6,
-            region.name()
-        )
-    } else {
-        format!("Offset {:+.3} MHz.", off as f64 / 1e6)
-    };
-    ui.label(RichText::new(note).size(13.0).color(p.muted));
+    if listen.is_some() {
+        ui.label(
+            RichText::new("Listen-only band: the radio receives here, and TX follows RX.")
+                .size(13.0)
+                .color(p.muted),
+        );
+    }
     ui.horizontal_wrapped(|ui| {
         let editable = listen.is_none();
         if ui
@@ -383,18 +363,6 @@ fn detail(
             .clicked()
         {
             c.rx_hz = c.tx_hz;
-        }
-        let std_tx = bandplan::tx_for_rx(region, c.rx_hz);
-        if ui
-            .add_enabled(
-                editable && std_tx.is_some() && std_tx != Some(c.tx_hz),
-                egui::Button::new("Standard offset"),
-            )
-            .clicked()
-        {
-            if let Some(tx) = std_tx {
-                c.tx_hz = tx;
-            }
         }
     });
     egui::Grid::new(("basic2", number))

@@ -14,7 +14,6 @@ mod zones;
 
 use doc::Doc;
 use eframe::egui;
-use rfcps_core::bandplan::Region;
 use rfcps_core::Image;
 use rfcps_link::PortInfo;
 use std::sync::mpsc::Receiver;
@@ -39,7 +38,6 @@ struct App {
     tab: Tab,
     zone: usize,
     channel: Option<u16>,
-    region: Region,
 }
 
 impl App {
@@ -61,7 +59,6 @@ impl App {
             tab: Tab::Channels,
             zone: 0,
             channel: None,
-            region: Region::default(),
         }
     }
 
@@ -332,16 +329,6 @@ impl eframe::App for App {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     egui::widgets::global_theme_preference_buttons(ui);
-                    ui.separator();
-                    egui::ComboBox::from_id_salt("region")
-                        .selected_text(self.region.name())
-                        .width(130.0)
-                        .show_ui(ui, |ui| {
-                            for r in Region::ALL {
-                                ui.selectable_value(&mut self.region, r, r.name());
-                            }
-                        });
-                    ui.label("Band plan");
                 });
             });
         });
@@ -360,7 +347,7 @@ impl eframe::App for App {
             ui.separator();
             let before = doc.cp.clone();
             match self.tab {
-                Tab::Channels => channels::show(ui, &mut doc.cp, &mut self.channel, self.region),
+                Tab::Channels => channels::show(ui, &mut doc.cp, &mut self.channel),
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
                 Tab::Contacts => contacts::show(ui, &mut doc.cp),
                 Tab::General => general::show(ui, &mut doc.cp),
