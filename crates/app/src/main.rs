@@ -413,7 +413,9 @@ impl App {
                     self.flow.request(d);
                 }
             }
-            ui.separator();
+        });
+        // File and edit buttons on a row of their own, so a window resize never splits them from each other
+        ui.horizontal_wrapped(|ui| {
             if ui.button("New").clicked() {
                 self.ask_new();
             }
