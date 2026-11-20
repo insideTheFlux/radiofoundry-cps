@@ -98,6 +98,14 @@ pub fn write_radio(
             radio.ping().map_err(|e| {
                 format!("{e} (is it a RadioFoundry radio, switched on, on this port?)")
             })?;
+            // Nothing differs: no backup and no write. (The blocks' checksums are compared, which is quick.)
+            let differs = radio.verify(&image).map_err(|e| e.to_string())?;
+            if differs.is_empty() {
+                return Ok(WriteDone {
+                    blocks: 0,
+                    backup: std::path::PathBuf::new(),
+                });
+            }
             say(WriteMsg::Phase(
                 "Saving a backup of the radio's codeplug…".into(),
             ));
