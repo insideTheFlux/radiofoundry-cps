@@ -171,9 +171,9 @@ impl Flow {
                                 d.mark_saved();
                             }
                             let text = if w.blocks == 0 {
-                                format!("The radio already held these edits; nothing was written. Backup: {}", w.backup.display())
+                                format!("The radio already held this codeplug; nothing needed writing. Backup: {}", w.backup.display())
                             } else {
-                                format!("Wrote {} block(s) and read them back: the radio holds your codeplug. Backup of the old codeplug: {}", w.blocks, w.backup.display())
+                                format!("The radio now holds this codeplug ({} block(s) written and read back to verify). Backup of the old codeplug: {}", w.blocks, w.backup.display())
                             };
                             status = Some(text.clone());
                             State::Done { ok: true, text }

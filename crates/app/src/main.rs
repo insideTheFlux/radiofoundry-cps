@@ -51,6 +51,8 @@ struct App {
     doc_serial: u64,
     show_problems: bool,
     notice: Option<(String, Vec<String>)>,
+    /// The green or red bar under the toolbar after a write; the x closes it.
+    banner: Option<(bool, String)>,
 }
 
 impl App {
@@ -80,6 +82,7 @@ impl App {
             doc_serial: 0,
             show_problems: true,
             notice: None,
+            banner: None,
         }
     }
 
@@ -501,6 +504,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let port = self.port.clone();
         if let Some(msg) = self.flow.show(&ctx, &port, self.doc.as_mut()) {
+            self.banner = Some((!msg.starts_with("Write failed"), msg.clone()));
             self.status = msg;
         }
         // Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) outside a text field
@@ -526,6 +530,31 @@ impl eframe::App for App {
             self.top_bar(ui);
             ui.add_space(4.0);
         });
+        if let Some((ok, text)) = self.banner.clone() {
+            let p = theme::palette(ui);
+            let colour = if ok { p.ok } else { p.bad };
+            let mut close = false;
+            egui::Panel::top("banner").show(ui, |ui| {
+                egui::Frame::new()
+                    .fill(colour.gamma_multiply(0.16))
+                    .stroke(egui::Stroke::new(1.0, colour))
+                    .corner_radius(4.0)
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(text.as_str());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("x").on_hover_text("Close").clicked() {
+                                    close = true;
+                                }
+                            });
+                        });
+                    });
+            });
+            if close {
+                self.banner = None;
+            }
+        }
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
@@ -537,7 +566,9 @@ impl eframe::App for App {
                             .map_or_else(|| d.source.clone(), |n| n.to_string_lossy().into_owned()),
                     );
                     if d.dirty() {
-                        ui.colored_label(theme::palette(ui).warn, "edited, not saved");
+                        ui.colored_label(theme::palette(ui).warn, "Unsaved changes");
+                    } else {
+                        ui.label(egui::RichText::new("No unsaved changes").color(theme::palette(ui).muted));
                     }
                     let (e, w) = (
                         problems::error_count(&self.problems),
@@ -658,10 +689,23 @@ impl eframe::App for App {
             }
             let Some(doc) = &mut self.doc else { return };
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, Tab::Channels, "Channels");
-                ui.selectable_value(&mut self.tab, Tab::Zones, "Zones");
-                ui.selectable_value(&mut self.tab, Tab::Contacts, "Contacts");
-                ui.selectable_value(&mut self.tab, Tab::Lists, "RX Group Lists");
+                let cp = &doc.cp;
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::Channels,
+                    format!("Channels  {}", cp.channels.len()),
+                );
+                ui.selectable_value(&mut self.tab, Tab::Zones, format!("Zones  {}", cp.zones.len()));
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::Contacts,
+                    format!("Contacts  {}", cp.contacts.len()),
+                );
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::Lists,
+                    format!("RX Group Lists  {}", cp.rx_lists.len()),
+                );
                 ui.selectable_value(&mut self.tab, Tab::General, "General");
             });
             ui.separator();
