@@ -674,6 +674,8 @@ impl eframe::App for App {
                     let n = freqs::set_weather_rx_only(&mut d.cp);
                     d.note(before, None);
                     self.status = format!("Set RX only on {n} weather channel(s).");
+                    // The toolbar was drawn before this edit: draw again so Write to radio lights up at once.
+                    ui.ctx().request_repaint();
                 }
             }
             if let Some((t, n)) = jump {
@@ -742,7 +744,12 @@ impl eframe::App for App {
                 Tab::General => general::show(ui, &mut doc.cp),
             }
             let focus = ui.memory(|m| m.focused());
+            let generation = doc.generation;
             doc.note(before, focus);
+            if doc.generation != generation {
+                // Same reason: the toolbar above shows the state from before this edit.
+                ui.ctx().request_repaint();
+            }
         });
     }
 }
