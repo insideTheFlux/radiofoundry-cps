@@ -356,3 +356,33 @@ fn the_chirp_export_matches_the_web_editor() {
     assert_eq!(text, std::fs::read_to_string(csv).unwrap());
     eprintln!("chirp export identical to the web editor's ({dmr} DMR channel(s) left out)");
 }
+
+#[test]
+fn the_qdmr_yaml_matches_the_web_editor() {
+    let (Ok(img_path), Ok(dir)) = (std::env::var("RFCPS_IMAGE"), std::env::var("RFCPS_QDMR_DIR"))
+    else {
+        eprintln!("RFCPS_IMAGE / RFCPS_QDMR_DIR not set: skipped");
+        return;
+    };
+    let image = Image::from_bytes(&std::fs::read(img_path).unwrap());
+    let read = |n: &str| std::fs::read_to_string(format!("{dir}/{n}")).unwrap();
+    let cp = Codeplug::decode(&image);
+
+    // The export is the web editor's, character for character
+    let (text, _) = rfcps_core::qdmr::export_qdmr(&cp);
+    let gold = read("qdmr_js.yaml");
+    if text != gold {
+        let (a, b): (Vec<&str>, Vec<&str>) = (text.lines().collect(), gold.lines().collect());
+        let at = a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+        panic!("export differs at line {}:\nrust: {:?}\nweb:  {:?}", at + 1, a.get(at), b.get(at));
+    }
+
+    // Importing the web editor's file and exporting again gives the web editor's result
+    let mut again = Codeplug::decode(&image);
+    let report = rfcps_core::qdmr::import_qdmr(&mut again, &gold).unwrap();
+    assert_eq!(report.channels, cp.channels.len());
+    let (round, _) = rfcps_core::qdmr::export_qdmr(&again);
+    assert!(round == read("qdmr_js_roundtrip.yaml"), "the round trip differs from the web editor's");
+    assert_eq!(again.channels.len(), cp.channels.len());
+    assert_eq!(again.zones, cp.zones);
+}

@@ -226,6 +226,31 @@ impl App {
         }
     }
 
+    fn import_qdmr_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new()
+            .add_filter("qdmr codeplug", &["yaml", "yml"])
+            .pick_file()
+        {
+            self.run_import("Import qdmr codeplug", "qdmr import", |cp| {
+                exchange::import_qdmr_file(cp, &p)
+            });
+        }
+    }
+
+    fn export_qdmr_dialog(&mut self) {
+        let (Some(doc), Some(p)) = (
+            &self.doc,
+            rfd::FileDialog::new()
+                .add_filter("qdmr codeplug", &["yaml"])
+                .set_file_name(format!("codeplug-{}.yaml", worker::stamp()))
+                .save_file(),
+        ) else {
+            return;
+        };
+        let r = exchange::export_qdmr_file(&doc.cp, &p);
+        self.finish_export("Export qdmr codeplug", r);
+    }
+
     fn import_csv_dialog(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
             .add_filter("CSV tables", &["csv"])
@@ -378,6 +403,10 @@ impl App {
                     ui.close();
                     self.import_chirp_dialog();
                 }
+                if ui.button("qdmr codeplug (YAML)…").clicked() {
+                    ui.close();
+                    self.import_qdmr_dialog();
+                }
                 if ui.button("CSV tables…").clicked() {
                     ui.close();
                     self.import_csv_dialog();
@@ -392,6 +421,10 @@ impl App {
                     if ui.button("CSV tables (a folder)…").clicked() {
                         ui.close();
                         self.export_csv_dialog();
+                    }
+                    if ui.button("qdmr codeplug (YAML)…").clicked() {
+                        ui.close();
+                        self.export_qdmr_dialog();
                     }
                     if ui.button("CHIRP CSV…").clicked() {
                         ui.close();

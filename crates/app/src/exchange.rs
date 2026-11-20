@@ -5,7 +5,7 @@
 //! returns the lines to show the person (what came in, and what could not).
 
 use rfcps_core::csv::{self, TableKind};
-use rfcps_core::{chirp, stock_dm32, Codeplug};
+use rfcps_core::{chirp, qdmr, stock_dm32, Codeplug};
 use std::io::Read;
 use std::path::Path;
 
@@ -16,6 +16,26 @@ pub fn import_chirp_file(cp: &mut Codeplug, path: &Path) -> Result<Vec<String>, 
     let mut lines = vec![format!("Imported {} FM channel(s) in {} zone(s). The channels and zones that were here are replaced; contacts and settings are kept.", r.channels, r.zones)];
     lines.extend(r.notes.iter().map(|(n, c)| n.text(*c)));
     Ok(lines)
+}
+
+pub fn import_qdmr_file(cp: &mut Codeplug, path: &Path) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+    let r = qdmr::import_qdmr(cp, &text)?;
+    let mut lines = vec![format!(
+        "Imported {} channel(s), {} contact(s), {} RX group list(s) and {} zone(s) from the qdmr file. The tables that were here are replaced; the VFOs and the settings qdmr does not hold are kept.",
+        r.channels, r.contacts, r.rx_lists, r.zones
+    )];
+    lines.extend(r.notes.iter().map(|(n, c)| n.text(*c)));
+    Ok(lines)
+}
+
+pub fn export_qdmr_file(cp: &Codeplug, path: &Path) -> Result<Vec<String>, String> {
+    let (text, notes) = qdmr::export_qdmr(cp);
+    std::fs::write(path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    let mut out = vec![format!("Wrote the qdmr codeplug to {}.", path.display())];
+    out.extend(notes.iter().map(|(n, c)| n.text(*c)));
+    Ok(out)
 }
 
 pub fn import_csv_files(
@@ -190,5 +210,24 @@ mod tests {
         let mut cp = Codeplug::decode(&Image::blank());
         assert!(import_chirp_file(&mut cp, Path::new("/nonexistent/x.csv")).is_err());
         assert!(import_stock_file(&mut cp, Path::new("/nonexistent/x.zip")).is_err());
+    }
+
+    #[test]
+    fn a_qdmr_file_round_trips_through_the_files_api() {
+        let dir = std::env::temp_dir().join(format!("rfcps-qdmr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cp = Codeplug::decode(&Image::blank());
+        cp.channels.push(rfcps_core::records::Channel::new(1, 146_520_000, 146_520_000));
+        let f = dir.join("c.yaml");
+        let out = export_qdmr_file(&cp, &f).unwrap();
+        assert!(out[0].contains("c.yaml"));
+        let mut again = Codeplug::decode(&Image::blank());
+        let lines = import_qdmr_file(&mut again, &f).unwrap();
+        assert!(lines[0].contains("1 channel(s)"), "{lines:?}");
+        assert_eq!(again.channels[0].rx_hz, 146_520_000);
+        std::fs::write(dir.join("bad.yaml"), "a: [1\n").unwrap();
+        assert!(import_qdmr_file(&mut again, &dir.join("bad.yaml")).is_err());
+        assert!(import_qdmr_file(&mut again, &dir.join("missing.yaml")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
