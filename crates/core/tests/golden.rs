@@ -340,3 +340,19 @@ fn the_csv_export_matches_the_web_editor() {
     }
     eprintln!("csv export identical to the web editor's");
 }
+
+/// The CHIRP export of a real image is, byte for byte, the web editor's (`RFCPS_CHIRP_CSV`).
+#[test]
+fn the_chirp_export_matches_the_web_editor() {
+    let (Ok(img_path), Ok(csv)) = (
+        std::env::var("RFCPS_IMAGE"),
+        std::env::var("RFCPS_CHIRP_CSV"),
+    ) else {
+        eprintln!("RFCPS_IMAGE / RFCPS_CHIRP_CSV not set: skipped");
+        return;
+    };
+    let cp = Codeplug::decode(&Image::from_bytes(&std::fs::read(img_path).unwrap()));
+    let (text, dmr) = rfcps_core::chirp::export_chirp(&cp);
+    assert_eq!(text, std::fs::read_to_string(csv).unwrap());
+    eprintln!("chirp export identical to the web editor's ({dmr} DMR channel(s) left out)");
+}
