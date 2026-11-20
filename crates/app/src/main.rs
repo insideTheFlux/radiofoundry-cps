@@ -568,7 +568,16 @@ impl eframe::App for App {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    egui::widgets::global_theme_preference_buttons(ui);
+                    let mut pref = ui.ctx().options(|o| o.theme_preference);
+                    // Text labels: the symbol glyphs egui uses are not in the bundled font.
+                    for (value, label) in [
+                        (egui::ThemePreference::System, "Auto"),
+                        (egui::ThemePreference::Dark, "Dark"),
+                        (egui::ThemePreference::Light, "Light"),
+                    ] {
+                        ui.selectable_value(&mut pref, value, label);
+                    }
+                    ui.ctx().set_theme(pref);
                 });
             });
         });
