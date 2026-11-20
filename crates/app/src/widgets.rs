@@ -5,19 +5,21 @@
 
 use eframe::egui::{self, Color32, Response, Stroke, Ui};
 
-/// A frequency in MHz, edited in place; the value is kept in Hz on a 10 Hz grid.
-pub fn freq_mhz(ui: &mut Ui, hz: &mut u64) -> Response {
-    let mut mhz = *hz as f64 / 1e6;
-    let r = ui.add(
-        egui::DragValue::new(&mut mhz)
-            .speed(0.00625)
-            .fixed_decimals(5)
-            .range(30.0..=1000.0),
-    );
-    if r.changed() {
-        *hz = (mhz * 1e5).round() as u64 * 10;
+/// A frequency in MHz as typed text, so a drag of the mouse can't change it. The value is kept in Hz on a 10 Hz
+/// grid; text that is no frequency (or outside 30 to 1000 MHz) is outlined in red and not applied.
+pub fn freq_edit(ui: &mut Ui, id: egui::Id, hz: &mut u64) -> Response {
+    let shown = format!("{:.5}", *hz as f64 / 1e6);
+    let (r, v) = checked_text(ui, id, shown, 86.0, parse_mhz);
+    if let Some(v) = v {
+        *hz = v;
     }
     r
+}
+
+/// "146.52" or "146,52" MHz as Hz on a 10 Hz grid, or `None` if it is no frequency in 30 to 1000 MHz.
+pub fn parse_mhz(text: &str) -> Option<u64> {
+    let mhz: f64 = text.trim().replace(',', ".").parse().ok()?;
+    ((30.0..=1000.0).contains(&mhz)).then(|| (mhz * 1e5).round() as u64 * 10)
 }
 
 /// A text field that applies its text only when `accept` gives a value for it; while it is being typed the text
@@ -60,4 +62,19 @@ pub fn name_edit(ui: &mut Ui, name: &mut String, max: usize, width: f32) -> Resp
             .char_limit(max)
             .desired_width(width),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_mhz;
+
+    #[test]
+    fn frequencies_parse_to_a_10_hz_grid() {
+        assert_eq!(parse_mhz("146.52"), Some(146_520_000));
+        assert_eq!(parse_mhz(" 446,76000 "), Some(446_760_000));
+        assert_eq!(parse_mhz("446.7625"), Some(446_762_500));
+        assert_eq!(parse_mhz("12"), None);
+        assert_eq!(parse_mhz("1500"), None);
+        assert_eq!(parse_mhz("abc"), None);
+    }
 }

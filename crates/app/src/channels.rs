@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 insideTheFlux
 
-use crate::widgets::{checked_text, freq_mhz, name_edit};
+use crate::widgets::{checked_text, freq_edit, name_edit};
 use eframe::egui::{self, Ui};
 use egui_extras::{Column, TableBuilder};
 use rfcps_core::fields::parse_tone;
@@ -104,7 +104,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
                 .column(Column::exact(190.0))
                 .column(Column::exact(104.0))
                 .column(Column::exact(104.0))
-                .column(Column::exact(68.0))
+                .column(Column::exact(78.0))
                 .column(Column::exact(88.0))
                 .column(Column::exact(86.0))
                 .column(Column::exact(86.0))
@@ -137,15 +137,15 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
                             name_edit(ui, &mut c.name, 16, 176.0);
                         });
                         row.col(|ui| {
-                            freq_mhz(ui, &mut c.rx_hz);
+                            freq_edit(ui, ui.scope_id().with(("rx_hz", number)), &mut c.rx_hz);
                         });
                         row.col(|ui| {
-                            freq_mhz(ui, &mut c.tx_hz);
+                            freq_edit(ui, ui.scope_id().with(("tx_hz", number)), &mut c.tx_hz);
                         });
                         row.col(|ui| {
                             egui::ComboBox::from_id_salt(("mode", number))
                                 .selected_text(if c.mode == Mode::Dmr { "DMR" } else { "FM" })
-                                .width(48.0)
+                                .width(58.0)
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(&mut c.mode, Mode::Fm, "FM");
                                     ui.selectable_value(&mut c.mode, Mode::Dmr, "DMR");
