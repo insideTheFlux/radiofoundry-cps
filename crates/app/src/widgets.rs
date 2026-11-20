@@ -5,15 +5,12 @@
 
 use eframe::egui::{self, Color32, Response, Stroke, Ui};
 
-/// A frequency in MHz as typed text, so a drag of the mouse can't change it. The value is kept in Hz on a 10 Hz
-/// grid; text that is no frequency (or outside 30 to 1000 MHz) is outlined in red and not applied.
-pub fn freq_edit(ui: &mut Ui, id: egui::Id, hz: &mut u64) -> Response {
-    let shown = format!("{:.5}", *hz as f64 / 1e6);
-    let (r, v) = checked_text(ui, id, shown, 86.0, parse_mhz);
-    if let Some(v) = v {
-        *hz = v;
-    }
-    r
+/// A frequency in MHz as typed text, so a drag of the mouse can't change it. Returns the new frequency (Hz, on a
+/// 10 Hz grid) when the typed text is a frequency in 30 to 1000 MHz; other text is outlined in red and not applied.
+pub fn freq_edit(ui: &mut Ui, id: egui::Id, hz: u64, enabled: bool) -> (Response, Option<u64>) {
+    let shown = format!("{:.5}", hz as f64 / 1e6);
+    ui.add_enabled_ui(enabled, |ui| checked_text(ui, id, shown, 86.0, parse_mhz))
+        .inner
 }
 
 /// "146.52" or "146,52" MHz as Hz on a 10 Hz grid, or `None` if it is no frequency in 30 to 1000 MHz.

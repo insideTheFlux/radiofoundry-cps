@@ -14,6 +14,7 @@ mod zones;
 
 use doc::Doc;
 use eframe::egui;
+use rfcps_core::bandplan::Region;
 use rfcps_core::Image;
 use rfcps_link::PortInfo;
 use std::sync::mpsc::Receiver;
@@ -37,6 +38,8 @@ struct App {
     status: String,
     tab: Tab,
     zone: usize,
+    channel: Option<u16>,
+    region: Region,
 }
 
 impl App {
@@ -57,6 +60,8 @@ impl App {
             status: "Open an image file, or read from a radio.".into(),
             tab: Tab::Channels,
             zone: 0,
+            channel: None,
+            region: Region::default(),
         }
     }
 
@@ -162,7 +167,7 @@ impl App {
                 egui::RichText::new("RadioFoundry CPS")
                     .strong()
                     .size(17.0)
-                    .color(theme::ACCENT),
+                    .color(theme::palette(ui).accent),
             );
             ui.separator();
             ui.label("Radio on");
@@ -195,8 +200,7 @@ impl App {
             if ui.button("Refresh").clicked() {
                 self.refresh_ports();
             }
-            let read = egui::Button::new(egui::RichText::new("Read from radio").strong())
-                .fill(theme::ACCENT_DARK);
+            let read = theme::primary(ui, "Read from radio", 15.0);
             if ui
                 .add_enabled(!busy && !self.port.is_empty(), read)
                 .clicked()
@@ -253,9 +257,7 @@ impl App {
                 let w = 2.0 * 190.0 + ui.spacing().item_spacing.x;
                 ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
                 let read =
-                    egui::Button::new(egui::RichText::new("Read from radio").strong().size(17.0))
-                        .fill(theme::ACCENT_DARK)
-                        .min_size(egui::vec2(190.0, 44.0));
+                    theme::primary(ui, "Read from radio", 17.0).min_size(egui::vec2(190.0, 44.0));
                 if ui
                     .add_enabled(self.reading.is_none() && !self.port.is_empty(), read)
                     .clicked()
@@ -275,7 +277,7 @@ impl App {
             ui.add_space(16.0);
             if self.port.is_empty() {
                 ui.colored_label(
-                    theme::WARN,
+                    theme::palette(ui).warn,
                     "No USB serial port found. Connect the radio's cable, then press Refresh.",
                 );
             } else {
@@ -325,12 +327,22 @@ impl eframe::App for App {
                             .map_or_else(|| d.source.clone(), |n| n.to_string_lossy().into_owned()),
                     );
                     if d.dirty() {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(210, 140, 30),
-                            "edited, not saved",
-                        );
+                        ui.colored_label(theme::palette(ui).warn, "edited, not saved");
                     }
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::widgets::global_theme_preference_buttons(ui);
+                    ui.separator();
+                    egui::ComboBox::from_id_salt("region")
+                        .selected_text(self.region.name())
+                        .width(130.0)
+                        .show_ui(ui, |ui| {
+                            for r in Region::ALL {
+                                ui.selectable_value(&mut self.region, r, r.name());
+                            }
+                        });
+                    ui.label("Band plan");
+                });
             });
         });
         egui::CentralPanel::default().show(ui, |ui| {
@@ -348,7 +360,7 @@ impl eframe::App for App {
             ui.separator();
             let before = doc.cp.clone();
             match self.tab {
-                Tab::Channels => channels::show(ui, &mut doc.cp),
+                Tab::Channels => channels::show(ui, &mut doc.cp, &mut self.channel, self.region),
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
                 Tab::Contacts => contacts::show(ui, &mut doc.cp),
                 Tab::General => general::show(ui, &mut doc.cp),

@@ -5,6 +5,7 @@
 //! radio's image. No serial port and no GUI in this crate, so everything in it is unit tested on the host.
 //! Formats follow RadioFoundry's `docs/spec/` (open-firmware-cps.md 7).
 
+pub mod bandplan;
 pub mod fields;
 pub mod image;
 pub mod model;
