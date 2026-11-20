@@ -168,28 +168,28 @@ impl App {
             ui.label("Radio on");
             let label = self.port_label();
             let mut chosen = self.port.clone();
+            let mut show_all = self.show_all_ports;
+            let list: Vec<(String, String)> = self
+                .visible_ports()
+                .iter()
+                .map(|p| (p.name.clone(), format!("{}  {}", p.name, p.description)))
+                .collect();
             egui::ComboBox::from_id_salt("port")
                 .selected_text(label)
                 .width(300.0)
                 .show_ui(ui, |ui| {
-                    let list: Vec<(String, String)> = self
-                        .visible_ports()
-                        .iter()
-                        .map(|p| (p.name.clone(), format!("{}  {}", p.name, p.description)))
-                        .collect();
                     if list.is_empty() {
                         ui.weak("No USB serial port found. Connect the cable and press Refresh.");
                     }
                     for (name, text) in list {
                         ui.selectable_value(&mut chosen, name, text);
                     }
+                    ui.separator();
+                    ui.checkbox(&mut show_all, "Show built-in and legacy ports too");
                 });
             self.port = chosen;
-            if ui
-                .checkbox(&mut self.show_all_ports, "all ports")
-                .on_hover_text("Also list built-in and legacy serial ports")
-                .changed()
-            {
+            if show_all != self.show_all_ports {
+                self.show_all_ports = show_all;
                 self.refresh_ports();
             }
             if ui.button("Refresh").clicked() {
@@ -367,7 +367,7 @@ fn main() -> eframe::Result<()> {
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 640.0])
+            .with_inner_size([1240.0, 680.0])
             .with_title("RadioFoundry CPS"),
         ..Default::default()
     };
