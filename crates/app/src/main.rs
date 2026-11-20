@@ -6,6 +6,7 @@
 mod channels;
 mod contacts;
 mod doc;
+mod exchange;
 mod general;
 mod theme;
 mod widgets;
@@ -45,6 +46,7 @@ struct App {
     problems_key: (u64, u64),
     doc_serial: u64,
     show_problems: bool,
+    notice: Option<(String, Vec<String>)>,
 }
 
 impl App {
@@ -71,6 +73,7 @@ impl App {
             problems_key: (u64::MAX, u64::MAX),
             doc_serial: 0,
             show_problems: true,
+            notice: None,
         }
     }
 
@@ -171,6 +174,109 @@ impl App {
         }
     }
 
+    /// Runs an import on the open codeplug (a new empty one if none is open) as one undoable edit, and shows what came
+    /// in and what could not.
+    fn run_import(
+        &mut self,
+        title: &str,
+        source: &str,
+        f: impl FnOnce(&mut rfcps_core::Codeplug) -> Result<Vec<String>, String>,
+    ) {
+        if self.doc.is_none() {
+            self.doc = Some(Doc::from_image(Image::blank(), source.to_string()));
+            self.doc_serial += 1;
+        }
+        let Some(doc) = &mut self.doc else { return };
+        let before = doc.cp.clone();
+        match f(&mut doc.cp) {
+            Ok(lines) => {
+                doc.note(before, None);
+                self.status = format!("{title}: done.");
+                self.notice = Some((title.to_string(), lines));
+            }
+            Err(e) => {
+                doc.cp = before;
+                self.status = format!("{title}: {e}");
+                self.notice = Some((format!("{title}: nothing was imported"), vec![e]));
+            }
+        }
+    }
+
+    fn import_chirp_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new()
+            .add_filter("CHIRP CSV", &["csv"])
+            .pick_file()
+        {
+            self.run_import("Import CHIRP CSV", "CHIRP import", |cp| {
+                exchange::import_chirp_file(cp, &p)
+            });
+        }
+    }
+
+    fn import_csv_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new()
+            .add_filter("CSV tables", &["csv"])
+            .pick_files()
+        {
+            self.run_import("Import CSV tables", "CSV import", |cp| {
+                exchange::import_csv_files(cp, &p)
+            });
+        }
+    }
+
+    fn import_stock_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new()
+            .add_filter("Stock DM-32UV backup", &["zip", "bin"])
+            .pick_file()
+        {
+            self.run_import(
+                "Import stock DM-32UV codeplug",
+                "stock DM-32UV import",
+                |cp| exchange::import_stock_file(cp, &p),
+            );
+        }
+    }
+
+    fn export_csv_dialog(&mut self) {
+        let (Some(doc), Some(dir)) = (
+            &self.doc,
+            rfd::FileDialog::new()
+                .set_title("Choose a folder for the CSV files")
+                .pick_folder(),
+        ) else {
+            return;
+        };
+        let r = exchange::export_csv_folder(&doc.cp, &dir);
+        self.finish_export("Export CSV tables", r);
+    }
+
+    fn export_chirp_dialog(&mut self) {
+        let (Some(doc), Some(p)) = (
+            &self.doc,
+            rfd::FileDialog::new()
+                .add_filter("CHIRP CSV", &["csv"])
+                .set_file_name("channels-chirp.csv")
+                .save_file(),
+        ) else {
+            return;
+        };
+        let r = exchange::export_chirp_file(&doc.cp, &p);
+        self.finish_export("Export CHIRP CSV", r);
+    }
+
+    fn finish_export(&mut self, title: &str, r: Result<Vec<String>, String>) {
+        match r {
+            Ok(lines) => {
+                self.status = format!("{title}: done.");
+                self.notice = Some((title.to_string(), lines));
+            }
+            Err(e) => {
+                self.status = format!("{title}: {e}");
+                self.notice = Some((format!("{title}: failed"), vec![e]));
+            }
+        }
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let busy = self.reading.is_some();
         ui.horizontal_wrapped(|ui| {
@@ -254,6 +360,33 @@ impl App {
                 self.save_dialog();
             }
             ui.separator();
+            ui.menu_button("Import", |ui| {
+                if ui.button("CHIRP CSV…").clicked() {
+                    ui.close();
+                    self.import_chirp_dialog();
+                }
+                if ui.button("CSV tables…").clicked() {
+                    ui.close();
+                    self.import_csv_dialog();
+                }
+                if ui.button("Stock DM-32UV backup…").clicked() {
+                    ui.close();
+                    self.import_stock_dialog();
+                }
+            });
+            ui.add_enabled_ui(self.doc.is_some(), |ui| {
+                ui.menu_button("Export", |ui| {
+                    if ui.button("CSV tables (a folder)…").clicked() {
+                        ui.close();
+                        self.export_csv_dialog();
+                    }
+                    if ui.button("CHIRP CSV…").clicked() {
+                        ui.close();
+                        self.export_chirp_dialog();
+                    }
+                });
+            });
+            ui.separator();
             let (undo, redo) = self
                 .doc
                 .as_ref()
@@ -336,6 +469,28 @@ impl eframe::App for App {
         } else {
             self.problems.clear();
             self.problems_key = (u64::MAX, u64::MAX);
+        }
+        if let Some((title, lines)) = self.notice.clone() {
+            let mut close = false;
+            let m = egui::Modal::new(egui::Id::unique("notice")).show(ui.ctx(), |ui| {
+                ui.set_width(560.0);
+                ui.heading(&title);
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for l in &lines {
+                            ui.label(l);
+                        }
+                    });
+                ui.add_space(10.0);
+                if ui.add(theme::primary(ui, "OK", 15.0)).clicked() {
+                    close = true;
+                }
+            });
+            if close || m.should_close() {
+                self.notice = None;
+            }
         }
         let ctx = ui.ctx().clone();
         let port = self.port.clone();
