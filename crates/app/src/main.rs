@@ -773,7 +773,15 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
-            Ok(Box::new(App::new()))
+            let mut app = App::new();
+            // `rfcps file.bin` opens that image at start.
+            if let Some(path) = std::env::args_os().nth(1) {
+                match std::fs::read(&path) {
+                    Ok(b) => app.open_image(&b, path.to_string_lossy().into_owned()),
+                    Err(e) => app.status = format!("Could not read {}: {e}", path.to_string_lossy()),
+                }
+            }
+            Ok(Box::new(app))
         }),
     )
 }

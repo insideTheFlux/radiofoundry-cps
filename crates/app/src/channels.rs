@@ -91,21 +91,19 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
             .map(|l| (l.number, l.name.clone()))
             .collect(),
     };
-    // The table keeps its natural width and the form sits right beside it, so a wide window leaves its spare room at
-    // the far right instead of a hole in the middle. A narrow window gives the form 400 and the table the rest.
+    // The table keeps its natural width in a panel on the left and the form fills the rest, so a wide window leaves
+    // its spare room at the far right instead of a hole in the middle.
     const TABLE_W: f32 = 960.0;
-    let height = ui.available_height();
     let table_w = TABLE_W.min((ui.available_width() - 400.0).max(300.0));
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui(egui::vec2(table_w, height), |ui| {
-            table(ui, cp, selected, &choices)
-        });
-        ui.separator();
-        ui.allocate_ui(egui::vec2(ui.available_width().min(460.0), height), |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| detail(ui, cp, selected, &choices));
-        });
+    egui::Panel::left("channel_table")
+        .resizable(false)
+        .exact_size(table_w)
+        .show(ui, |ui| table(ui, cp, selected, &choices));
+    egui::CentralPanel::default().show(ui, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("channel_detail")
+            .auto_shrink([false, false])
+            .show(ui, |ui| detail(ui, cp, selected, &choices));
     });
 }
 
