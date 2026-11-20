@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=RadioFoundry CPS
+GenericName=Codeplug editor
+Comment=Read, edit and write the codeplug of a RadioFoundry radio
+Exec=rfcps
+Icon=rfcps
+Terminal=false
+Categories=HamRadio;Utility;
+Keywords=radio;codeplug;DMR;channels;
