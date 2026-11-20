@@ -31,18 +31,7 @@ fn power_name(p: u8) -> String {
 
 fn new_channel(cp: &Codeplug) -> Option<Channel> {
     let number = (1..=MAX_CHANNELS as u16).find(|n| !cp.channels.iter().any(|c| c.number == *n))?;
-    let mut c = rfcps_core::records::decode_channel(number, &{
-        let mut b = rfcps_core::records::blank_channel();
-        rfcps_core::fields::put_freq(&mut b, 0x10, 146_520_000);
-        rfcps_core::fields::put_freq(&mut b, 0x14, 146_520_000);
-        b
-    })?;
-    c.name = format!("Channel {number}");
-    c.bw = 25.0;
-    c.squelch = 0;
-    c.color_code = 1;
-    c.timeslot = 1;
-    Some(c)
+    Some(Channel::new(number, 146_520_000, 146_520_000))
 }
 
 struct Choices {

@@ -96,6 +96,22 @@ pub struct Channel {
     pub tone_burst: bool,
 }
 
+impl Channel {
+    /// A new FM channel: wide, radio-default power and squelch, the vendor defaults in the bytes no field covers.
+    pub fn new(number: u16, rx_hz: u64, tx_hz: u64) -> Self {
+        let mut r = blank_channel();
+        put_freq(&mut r, 0x10, rx_hz);
+        put_freq(&mut r, 0x14, tx_hz);
+        let mut c = decode_channel(number, &r).expect("a blank channel with frequencies decodes");
+        c.name = format!("Channel {number}");
+        c.bw = 25.0;
+        c.squelch = 0;
+        c.color_code = 1;
+        c.timeslot = 1;
+        c
+    }
+}
+
 /// A channel record (56 bytes); `None` if its frequencies are malformed or zero.
 pub fn decode_channel(number: u16, r: &[u8]) -> Option<Channel> {
     let rx_hz = get_freq(r, 0x10)?;

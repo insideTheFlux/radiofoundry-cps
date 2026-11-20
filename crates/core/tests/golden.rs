@@ -207,3 +207,136 @@ fn edits_encode_like_the_web_editor() {
     );
     eprintln!("edits encode identically to the web editor");
 }
+
+/// The stock DM-32UV import gives what the web editor's gives, except that DCS tones are read as BCD digits (the web
+/// editor's importer reads them as a decimal number: a known bug, fixed in RadioFoundry PR #776).
+/// `RFCPS_STOCK_DATA` is a stock radio's data flash, `RFCPS_STOCK_GOLDEN` the web editor's import of it (JSON).
+#[test]
+fn the_stock_import_matches_the_web_editor() {
+    use rfcps_core::stock_dm32;
+    let (Ok(data_path), Ok(gold_path)) = (
+        std::env::var("RFCPS_STOCK_DATA"),
+        std::env::var("RFCPS_STOCK_GOLDEN"),
+    ) else {
+        eprintln!("RFCPS_STOCK_DATA / RFCPS_STOCK_GOLDEN not set: skipped");
+        return;
+    };
+    let data = std::fs::read(data_path).unwrap();
+    let gold: Value = serde_json::from_slice(&std::fs::read(gold_path).unwrap()).unwrap();
+    assert!(stock_dm32::detect(&data));
+    let mut cp = Codeplug::decode(&Image::blank());
+    let report = stock_dm32::import_stock(&mut cp, &data).unwrap();
+    assert_eq!(
+        report.channels as u64,
+        gold["counts"]["channels"].as_u64().unwrap()
+    );
+    assert_eq!(
+        report.contacts as u64,
+        gold["counts"]["contacts"].as_u64().unwrap()
+    );
+    assert_eq!(
+        report.rx_lists as u64,
+        gold["counts"]["rxLists"].as_u64().unwrap()
+    );
+    assert_eq!(
+        report.zones as u64,
+        gold["counts"]["zones"].as_u64().unwrap()
+    );
+    assert_eq!(
+        u64::from(cp.general.dmr_id),
+        gold["general"]["dmrId"].as_u64().unwrap()
+    );
+    assert_eq!(
+        cp.general.radio_name,
+        gold["general"]["radioName"].as_str().unwrap()
+    );
+    let mut dcs = 0;
+    for (c, j) in cp.channels.iter().zip(gold["channels"].as_array().unwrap()) {
+        let at = format!("channel {} {}", c.number, c.name);
+        assert_eq!(c.name, j["name"].as_str().unwrap(), "{at}");
+        assert_eq!(c.rx_hz, j["rxHz"].as_u64().unwrap(), "{at}");
+        assert_eq!(c.tx_hz, j["txHz"].as_u64().unwrap(), "{at}");
+        assert_eq!(c.mode == Mode::Dmr, j["mode"] == "dmr", "{at}");
+        assert_eq!(u64::from(c.power), j["power"].as_u64().unwrap(), "{at}");
+        assert_eq!(c.bw, j["bw"].as_f64().unwrap(), "{at}");
+        assert_eq!(
+            u64::from(c.color_code),
+            j["colorCode"].as_u64().unwrap(),
+            "{at}"
+        );
+        assert_eq!(
+            u64::from(c.timeslot),
+            j["timeslot"].as_u64().unwrap(),
+            "{at}"
+        );
+        assert_eq!(
+            u64::from(c.contact),
+            j["contact"].as_u64().unwrap_or(0),
+            "{at}"
+        );
+        assert_eq!(
+            u64::from(c.rx_list),
+            j["rxList"].as_u64().unwrap_or(0),
+            "{at}"
+        );
+        for (mine, theirs) in [(&c.rx_tone, &j["rxTone"]), (&c.tx_tone, &j["txTone"])] {
+            let theirs = theirs.as_str().unwrap();
+            if theirs.starts_with('D') {
+                dcs += 1;
+                assert!(
+                    mine.starts_with('D') && mine != theirs,
+                    "{at}: DCS read as BCD ({mine}), not decimal ({theirs})"
+                );
+            } else {
+                assert_eq!(mine, theirs, "{at}");
+            }
+        }
+    }
+    for (z, j) in cp.zones.iter().zip(gold["zones"].as_array().unwrap()) {
+        assert_eq!(z.name, j["name"].as_str().unwrap());
+        let want: Vec<u64> = j["channels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            z.channels.iter().map(|&n| u64::from(n)).collect::<Vec<_>>(),
+            want
+        );
+    }
+    for (c, j) in cp.contacts.iter().zip(gold["contacts"].as_array().unwrap()) {
+        assert_eq!(
+            (c.name.as_str(), u64::from(c.id)),
+            (j["name"].as_str().unwrap(), j["id"].as_u64().unwrap())
+        );
+    }
+    eprintln!(
+        "stock import matches the web editor ({} channels, {} DCS tones read as BCD)",
+        cp.channels.len(),
+        dcs
+    );
+}
+
+/// The CSV export of a real image is, byte for byte, the web editor's. `RFCPS_CSV_DIR` holds the web editor's files
+/// (`channels.csv`, `contacts.csv`, `rx-group-lists.csv`, `zones.csv`) for `RFCPS_IMAGE`.
+#[test]
+fn the_csv_export_matches_the_web_editor() {
+    use rfcps_core::csv::{export_table, TableKind};
+    let (Ok(img_path), Ok(dir)) = (std::env::var("RFCPS_IMAGE"), std::env::var("RFCPS_CSV_DIR"))
+    else {
+        eprintln!("RFCPS_IMAGE / RFCPS_CSV_DIR not set: skipped");
+        return;
+    };
+    let cp = Codeplug::decode(&Image::from_bytes(&std::fs::read(img_path).unwrap()));
+    for t in [
+        TableKind::Contacts,
+        TableKind::RxLists,
+        TableKind::Channels,
+        TableKind::Zones,
+    ] {
+        let want = std::fs::read_to_string(format!("{dir}/{}", t.file())).unwrap();
+        assert_eq!(export_table(&cp, t), want, "{}", t.file());
+    }
+    eprintln!("csv export identical to the web editor's");
+}
