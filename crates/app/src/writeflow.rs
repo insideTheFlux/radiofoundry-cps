@@ -14,7 +14,7 @@ use std::sync::mpsc::Receiver;
 
 pub enum State {
     Idle,
-    Confirm(Vec<Change>),
+    Confirm(Vec<Change>, bool),
     Running {
         rx: Receiver<WriteMsg>,
         phase: String,
@@ -52,7 +52,7 @@ impl Flow {
     /// Opens the confirmation for the edits in `doc`.
     pub fn request(&mut self, doc: &Doc) {
         let old = Codeplug::decode(&doc.base);
-        self.state = State::Confirm(diff::changes(&old, &doc.cp));
+        self.state = State::Confirm(diff::changes(&old, &doc.cp), doc.from_file);
     }
 
     /// Draws whatever dialog the flow is at, and moves it on. Returns a status line when the write ends.
@@ -66,7 +66,7 @@ impl Flow {
         let mut next: Option<State> = None;
         match &mut self.state {
             State::Idle => {}
-            State::Confirm(changes) => {
+            State::Confirm(changes, from_file) => {
                 let mut go = false;
                 let mut cancel = false;
                 let m = egui::Modal::new(egui::Id::unique("write_confirm")).show(ctx, |ui| {
@@ -76,7 +76,9 @@ impl Flow {
                     ui.label(format!("Radio on {port}."));
                     ui.label("First, the radio's current codeplug is saved as a backup. Then only the changed blocks are written, and the radio is read back to check them.");
                     ui.add_space(8.0);
-                    if changes.is_empty() {
+                    if *from_file {
+                        ui.label("This codeplug comes from a file. The radio's codeplug will be replaced by it: whatever differs on the radio is overwritten (only those blocks are written).");
+                    } else if changes.is_empty() {
                         ui.label("No records changed.");
                     } else {
                         ui.strong(format!("{} change(s):", changes.len()));
@@ -114,7 +116,7 @@ impl Flow {
                     if let Some(d) = doc {
                         let rx = worker::write_radio(
                             port.to_string(),
-                            d.base.clone(),
+                            if d.from_file { None } else { Some(d.base.clone()) },
                             d.encoded(),
                             ctx.clone(),
                         );

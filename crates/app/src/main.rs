@@ -157,6 +157,9 @@ impl App {
             match std::fs::read(&path) {
                 Ok(b) => {
                     self.open_image(&b, path.display().to_string());
+                    if let Some(d) = &mut self.doc {
+                        d.from_file = true;
+                    }
                     self.status = format!("Opened {}.", path.display());
                 }
                 Err(e) => self.status = format!("Could not read {}: {e}", path.display()),
@@ -335,7 +338,7 @@ impl App {
                 self.start_read(&ui.ctx().clone());
             }
             let errors = problems::error_count(&self.problems);
-            let dirty = self.doc.as_mut().is_some_and(|d| d.dirty());
+            let dirty = self.doc.as_mut().is_some_and(|d| d.dirty() || d.from_file);
             let can_write = self.doc.is_some()
                 && errors == 0
                 && dirty
@@ -784,7 +787,12 @@ fn main() -> eframe::Result<()> {
             // `rfcps file.bin` opens that image at start.
             if let Some(path) = std::env::args_os().nth(1) {
                 match std::fs::read(&path) {
-                    Ok(b) => app.open_image(&b, path.to_string_lossy().into_owned()),
+                    Ok(b) => {
+                        app.open_image(&b, path.to_string_lossy().into_owned());
+                        if let Some(d) = &mut app.doc {
+                            d.from_file = true;
+                        }
+                    }
                     Err(e) => app.status = format!("Could not read {}: {e}", path.to_string_lossy()),
                 }
             }

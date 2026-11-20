@@ -83,7 +83,7 @@ pub fn stamp() -> String {
 /// does not start if that fails), then the changed blocks are written and the radio is read back.
 pub fn write_radio(
     port: String,
-    base: Image,
+    base: Option<Image>,
     image: Image,
     ctx: egui::Context,
 ) -> Receiver<WriteMsg> {
@@ -117,7 +117,7 @@ pub fn write_radio(
                 .map_err(|e| format!("could not save the backup {}: {e}", backup.display()))?;
             say(WriteMsg::Phase("Writing to the radio…".into()));
             let report = radio
-                .write_image(&base, &image, &mut |d, t| say(WriteMsg::Progress(d, t)))
+                .write_image(base.as_ref().unwrap_or(&current), &image, &mut |d, t| say(WriteMsg::Progress(d, t)))
                 .map_err(|e| {
                     format!(
                         "{e}. The radio's codeplug was saved first as {}.",

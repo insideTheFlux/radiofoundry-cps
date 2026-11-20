@@ -24,6 +24,9 @@ pub struct Doc {
     /// write to the radio is measured against `base` instead, so saving a file never switches the write off.
     saved: Image,
     unsaved_at: Option<(u64, bool)>,
+    /// Opened from a file and not yet written to a radio: the radio's own codeplug is unknown, so writing it is
+    /// allowed even with no edits, and the write is measured against what the radio holds at that moment.
+    pub from_file: bool,
 }
 
 impl Doc {
@@ -41,6 +44,7 @@ impl Doc {
             dirty_at: None,
             saved: base_copy,
             unsaved_at: None,
+            from_file: false,
         }
     }
 
@@ -122,6 +126,7 @@ impl Doc {
         self.saved = self.base.clone();
         self.dirty_at = None;
         self.unsaved_at = None;
+        self.from_file = false;
     }
 
     /// After the image was saved to a file. The radio still holds the old image, so the base stays as it is.
@@ -225,5 +230,16 @@ mod tests {
         assert!(!d.unsaved());
         d.mark_saved();
         assert!(!d.dirty() && !d.unsaved());
+    }
+
+    #[test]
+    fn a_file_opened_document_stays_writable_until_it_is_written() {
+        let mut d = doc();
+        d.from_file = true;
+        assert!(!d.dirty(), "no edits, yet the main window enables the write by from_file");
+        d.mark_file_saved();
+        assert!(d.from_file, "saving a file does not count as writing to the radio");
+        d.mark_saved();
+        assert!(!d.from_file);
     }
 }
