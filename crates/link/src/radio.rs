@@ -158,6 +158,68 @@ impl<P: Read + Write> Radio<P> {
     }
 }
 
+/// A serial port, described for a chooser.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PortInfo {
+    pub name: String,
+    /// What the port is, for a person: the USB product name and ids, or "serial port".
+    pub description: String,
+    /// A USB serial port (a programming cable or a radio's USB port), as opposed to a legacy or built-in one.
+    pub usb: bool,
+    /// A USB serial chip programming cables and radios use (FTDI, CH340, CP210x, Prolific, the radios' own).
+    pub likely: bool,
+}
+
+/// USB vendor and product ids of the serial chips radios and their cables use. `None` for a product matches every
+/// product of the vendor.
+const CABLE_CHIPS: [(u16, Option<u16>); 7] = [
+    (0x0403, None),         // FTDI
+    (0x1A86, Some(0x7523)), // CH340
+    (0x1A86, Some(0x55D4)), // CH9102
+    (0x10C4, Some(0xEA60)), // CP210x
+    (0x067B, None),         // Prolific
+    (0x1FC9, Some(0x0094)), // the open-firmware radios' USB serial
+    (0x0483, Some(0x5740)), // STM32 virtual COM port
+];
+
+/// The serial ports on this computer: likely radio cables first, then other USB ports, then the rest.
+pub fn ports() -> Vec<PortInfo> {
+    let mut v: Vec<PortInfo> = serialport::available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| match p.port_type {
+            serialport::SerialPortType::UsbPort(u) => PortInfo {
+                likely: CABLE_CHIPS
+                    .iter()
+                    .any(|&(v, pid)| v == u.vid && pid.is_none_or(|x| x == u.pid)),
+                description: format!(
+                    "{} ({:04X}:{:04X})",
+                    u.product
+                        .or(u.manufacturer)
+                        .unwrap_or_else(|| "USB serial".into()),
+                    u.vid,
+                    u.pid
+                ),
+                name: p.port_name,
+                usb: true,
+            },
+            _ => PortInfo {
+                description: "serial port".into(),
+                name: p.port_name,
+                usb: false,
+                likely: false,
+            },
+        })
+        .collect();
+    v.sort_by(|a, b| {
+        b.likely
+            .cmp(&a.likely)
+            .then(b.usb.cmp(&a.usb))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    v
+}
+
 /// Names of the serial ports on this computer, for the port chooser.
 pub fn port_names() -> Vec<String> {
     serialport::available_ports()

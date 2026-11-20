@@ -10,4 +10,4 @@ pub mod frame;
 pub mod radio;
 
 pub use fast::{Block, Info, Sums};
-pub use radio::{open, port_names, LinkError, Radio};
+pub use radio::{open, port_names, ports, LinkError, PortInfo, Radio};
