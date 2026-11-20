@@ -8,3 +8,4 @@ Icon=rfcps
 Terminal=false
 Categories=HamRadio;Utility;
 Keywords=radio;codeplug;DMR;channels;
+StartupWMClass=rfcps

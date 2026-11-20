@@ -692,7 +692,12 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1240.0, 680.0])
-            .with_title("RadioFoundry CPS"),
+            .with_title("RadioFoundry CPS")
+            .with_app_id("rfcps")
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../../../packaging/rfcps.png"))
+                    .expect("bundled icon"),
+            ),
         ..Default::default()
     };
     eframe::run_native(
