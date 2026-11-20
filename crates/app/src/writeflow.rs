@@ -14,7 +14,9 @@ use std::sync::mpsc::Receiver;
 
 pub enum State {
     Idle,
-    Confirm(Vec<Change>, bool),
+    /// The changes, whether the codeplug is from a file or new, whether it is empty (no channels, zones or contacts),
+    /// and whether the person ticked the box that allows writing an empty one.
+    Confirm(Vec<Change>, bool, bool, bool),
     Running {
         rx: Receiver<WriteMsg>,
         phase: String,
@@ -52,7 +54,8 @@ impl Flow {
     /// Opens the confirmation for the edits in `doc`.
     pub fn request(&mut self, doc: &Doc) {
         let old = Codeplug::decode(&doc.base);
-        self.state = State::Confirm(diff::changes(&old, &doc.cp), doc.from_file);
+        let empty = doc.cp.channels.is_empty() && doc.cp.zones.is_empty() && doc.cp.contacts.is_empty();
+        self.state = State::Confirm(diff::changes(&old, &doc.cp), doc.from_file, empty, false);
     }
 
     /// Draws whatever dialog the flow is at, and moves it on. Returns a status line when the write ends.
@@ -66,7 +69,7 @@ impl Flow {
         let mut next: Option<State> = None;
         match &mut self.state {
             State::Idle => {}
-            State::Confirm(changes, from_file) => {
+            State::Confirm(changes, from_file, empty, ack) => {
                 let mut go = false;
                 let mut cancel = false;
                 let m = egui::Modal::new(egui::Id::unique("write_confirm")).show(ctx, |ui| {
@@ -100,9 +103,21 @@ impl Flow {
                             }
                         });
                     }
+                    if *empty {
+                        ui.add_space(8.0);
+                        ui.colored_label(
+                            theme::palette(ui).bad,
+                            "This codeplug is empty: no channels, zones or contacts. Writing it erases all of them from the radio.",
+                        );
+                        ui.checkbox(ack, "I want to erase the radio's channels, zones and contacts");
+                    }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        if ui.add(theme::primary(ui, "Write to radio", 15.0)).clicked() {
+                        let allowed = !*empty || *ack;
+                        if ui
+                            .add_enabled(allowed, theme::primary(ui, "Write to radio", 15.0))
+                            .clicked()
+                        {
                             go = true;
                         }
                         if ui.button("Cancel").clicked() {
@@ -212,5 +227,22 @@ impl Flow {
             self.state = n;
         }
         status
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rfcps_core::Image;
+
+    #[test]
+    fn an_empty_codeplug_needs_the_box_ticked_before_it_can_be_written() {
+        let mut f = Flow { state: State::Idle };
+        let mut d = Doc::from_image(Image::blank(), "new".into());
+        f.request(&d);
+        assert!(matches!(f.state, State::Confirm(_, _, true, false)));
+        d.cp.channels.push(rfcps_core::records::Channel::new(1, 146_520_000, 146_520_000));
+        f.request(&d);
+        assert!(matches!(f.state, State::Confirm(_, _, false, false)));
     }
 }
