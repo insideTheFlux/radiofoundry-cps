@@ -1,0 +1,10 @@
+[package]
+name = "rfcps-link"
+description = "Serial link to a RadioFoundry radio: the CPS protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rfcps-core = { path = "../core" }
+serialport = { version = "4", default-features = false }

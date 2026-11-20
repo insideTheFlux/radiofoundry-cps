@@ -1,0 +1,11 @@
+[package]
+name = "rfcps"
+description = "RadioFoundry codeplug editor for Windows and Linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rfcps-core = { path = "../core" }
+rfcps-link = { path = "../link" }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
