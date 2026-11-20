@@ -7,7 +7,7 @@
 // warning is worth a look.
 
 use crate::fields::parse_tone;
-use crate::freqs::{listen_band, ListenBand};
+use crate::freqs::{is_weather, listen_band, ListenBand};
 use crate::model::Codeplug;
 use crate::records::{CallType, Mode, MAX_CHANNELS, MAX_CONTACTS, MAX_RX_LISTS, MAX_ZONES};
 
@@ -208,6 +208,18 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                 );
             }
             _ => {}
+        }
+        if is_weather(c.rx_hz) && !c.rx_only {
+            add(
+                warn,
+                Table::Channels,
+                n,
+                name,
+                format!(
+                    "A weather channel that can transmit on {:.4} MHz; set it to RX only.",
+                    c.tx_hz as f64 / 1e6
+                ),
+            );
         }
         if let Some(b) = listen_band(c.tx_hz) {
             if !c.rx_only {

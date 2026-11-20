@@ -17,6 +17,7 @@ mod zones;
 
 use doc::Doc;
 use eframe::egui;
+use rfcps_core::freqs;
 use rfcps_core::problems::{self, Level, Problem, Table};
 use rfcps_core::Image;
 use rfcps_link::PortInfo;
@@ -614,13 +615,28 @@ impl eframe::App for App {
         });
         if self.show_problems && !self.problems.is_empty() {
             let mut jump: Option<(Table, Option<u16>)> = None;
+            let mut fix_weather = false;
+            let weather = self
+                .doc
+                .as_ref()
+                .map_or(0, |d| d.cp.channels.iter().filter(|c| freqs::is_weather(c.rx_hz) && !c.rx_only).count());
             egui::Panel::bottom("problems")
                 .resizable(true)
                 .default_size(140.0)
                 .show(ui, |ui| {
                     let p = theme::palette(ui);
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("Problems").strong().color(p.accent));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Problems").strong().color(p.accent));
+                        if weather > 0
+                            && ui
+                                .button(format!("Set RX only on {weather} weather channel(s)"))
+                                .on_hover_text("North American weather frequencies: the channel keeps its frequencies and can no longer transmit")
+                                .clicked()
+                        {
+                            fix_weather = true;
+                        }
+                    });
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
@@ -652,6 +668,14 @@ impl eframe::App for App {
                             }
                         });
                 });
+            if fix_weather {
+                if let Some(d) = &mut self.doc {
+                    let before = d.cp.clone();
+                    let n = freqs::set_weather_rx_only(&mut d.cp);
+                    d.note(before, None);
+                    self.status = format!("Set RX only on {n} weather channel(s).");
+                }
+            }
             if let Some((t, n)) = jump {
                 match t {
                     Table::Channels => {

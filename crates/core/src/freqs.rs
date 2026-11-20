@@ -24,6 +24,27 @@ pub fn listen_band(hz: u64) -> Option<ListenBand> {
     }
 }
 
+/// The North American weather-radio frequencies: the seven NOAA channels from 162.400 to 162.550 MHz in 25 kHz steps
+/// and the three Canadian marine-weather channels. Other regions use different ones, so this is advice, never a rule
+/// the editor applies on its own.
+pub fn is_weather(hz: u64) -> bool {
+    matches!(hz, 161_650_000 | 161_775_000 | 163_275_000)
+        || ((162_400_000..=162_550_000).contains(&hz) && hz.is_multiple_of(25_000))
+}
+
+/// Marks every channel that receives on a weather frequency as RX only, leaving its frequencies alone. Returns how
+/// many channels changed.
+pub fn set_weather_rx_only(cp: &mut crate::model::Codeplug) -> usize {
+    let mut n = 0;
+    for c in &mut cp.channels {
+        if is_weather(c.rx_hz) && !c.rx_only {
+            c.rx_only = true;
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Sets the receive frequency.
 pub fn set_rx(c: &mut Channel, new_rx: u64) {
     let simplex = c.tx_hz == c.rx_hz;
@@ -94,5 +115,17 @@ mod tests {
         assert_eq!(c.tx_hz, 122_800_000);
         assert_eq!(listen_band(98_100_000), Some(ListenBand::Broadcast));
         assert_eq!(listen_band(137_000_000), None);
+    }
+
+    #[test]
+    fn weather_frequencies_are_found_and_set_rx_only() {
+        assert!(is_weather(162_400_000) && is_weather(162_550_000) && is_weather(161_650_000));
+        assert!(!is_weather(162_412_500) && !is_weather(162_575_000) && !is_weather(146_940_000));
+        let mut cp = crate::model::Codeplug::decode(&crate::Image::blank());
+        cp.channels = vec![chan(162_400_000, 400_000_000), chan(146_940_000, 146_340_000)];
+        assert_eq!(set_weather_rx_only(&mut cp), 1);
+        assert!(cp.channels[0].rx_only && !cp.channels[1].rx_only);
+        assert_eq!(cp.channels[0].tx_hz, 400_000_000);
+        assert_eq!(set_weather_rx_only(&mut cp), 0);
     }
 }
