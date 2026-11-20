@@ -12,6 +12,8 @@ use crate::records::*;
 pub struct Codeplug {
     pub general: General,
     pub channels: Vec<Channel>,
+    /// The two VFOs (channel records at fixed addresses); `None` where the record doesn't decode.
+    pub vfo: [Option<Channel>; 2],
     pub zones: Vec<Zone>,
     pub contacts: Vec<Contact>,
     pub rx_lists: Vec<RxList>,
@@ -65,9 +67,11 @@ impl Codeplug {
             }
             zones.push(decode_zone(slot, r, per));
         }
+        let vfo = [0, 1].map(|i| decode_channel(0, &b[VFO[i]..VFO[i] + CH_SIZE]));
         Self {
             general: decode_general(b),
             channels,
+            vfo,
             zones,
             contacts,
             rx_lists,
@@ -76,6 +80,146 @@ impl Codeplug {
 
     pub fn channel(&self, number: u16) -> Option<&Channel> {
         self.channels.iter().find(|c| c.number == number)
+    }
+}
+
+fn same_contact(a: &Contact, b: &Contact) -> bool {
+    (&a.name, a.id, a.call_type, a.timeslot) == (&b.name, b.id, b.call_type, b.timeslot)
+}
+
+impl Codeplug {
+    /// The codeplug written onto a copy of the image it was decoded from. Only records that differ from what the
+    /// image holds are rewritten, so everything this model doesn't cover (vendor bytes, APRS, DTMF, the keyed
+    /// settings, the channel modes) comes through unchanged, and an unedited codeplug encodes to the same bytes.
+    pub fn encode(&self, base: &Image) -> Image {
+        let mut img = base.clone();
+        let b = img.bytes_mut();
+
+        // Channels: the records, then the in-use bitmaps. A channel without a number is not stored.
+        let mut bits = [0u8; MAX_CHANNELS / 8];
+        for c in self.channels.iter().filter(|c| c.number != 0) {
+            let n = usize::from(c.number);
+            bits[(n - 1) >> 3] |= 1 << ((n - 1) & 7);
+            let a = channel_addr(n);
+            put_channel(&mut b[a..a + CH_SIZE], c);
+        }
+        for bank in 0..8 {
+            let a = bank_bitmap(bank);
+            b[a..a + 16].copy_from_slice(&bits[bank * 16..bank * 16 + 16]);
+        }
+        for (i, v) in self.vfo.iter().enumerate() {
+            if let Some(c) = v {
+                put_channel(&mut b[VFO[i]..VFO[i] + CH_SIZE], c);
+            }
+        }
+
+        // Zones: packed into slots 0..n-1 in order, the 80-channel layout. A 16-channel table is rewritten whole.
+        let per = zone_layout(b);
+        if per != 80 && !self.zones.is_empty() {
+            b[ZONE_DATA..ZONE_DATA + MAX_ZONES * ZONE_RECORD].fill(0);
+        }
+        let zones = &self.zones[..self.zones.len().min(MAX_ZONES)];
+        for (slot, z) in zones.iter().enumerate() {
+            let a = ZONE_DATA + slot * ZONE_RECORD;
+            let want = Zone {
+                slot,
+                name: z.name.clone(),
+                channels: z.channels.iter().copied().filter(|&n| n != 0).collect(),
+            };
+            let have = if per == 80 {
+                Some(decode_zone(slot, &b[a..a + ZONE_RECORD], 80))
+            } else {
+                None
+            };
+            if have.is_none_or(|h| h.name != want.name || h.channels != want.channels) {
+                encode_zone(&want, &mut b[a..a + ZONE_RECORD]);
+            }
+        }
+        for slot in 0..MAX_ZONES {
+            let (a, bit) = (ZONE_BITMAP + (slot >> 3), 1u8 << (slot & 7));
+            b[a] = if slot < zones.len() {
+                b[a] | bit
+            } else {
+                b[a] & !bit
+            };
+        }
+
+        // Contacts: a number without a contact is erased, as the radio deletes one.
+        for n in 1..=MAX_CONTACTS {
+            let a = CONTACTS + (n - 1) * CONTACT_SIZE;
+            let have = decode_contact(n as u16, &b[a..a + CONTACT_SIZE]);
+            match (
+                self.contacts.iter().find(|c| usize::from(c.number) == n),
+                have,
+            ) {
+                (Some(c), h) if h.as_ref().is_none_or(|h| !same_contact(h, c)) => {
+                    encode_contact(c, &mut b[a..a + CONTACT_SIZE]);
+                }
+                (None, Some(_)) => b[a..a + CONTACT_SIZE].fill(0xFF),
+                _ => {}
+            }
+        }
+
+        // RX group lists: the record, then the count that makes it visible.
+        for n in 1..=MAX_RX_LISTS {
+            let a = LISTS + (n - 1) * LIST_SIZE;
+            let count = b[LIST_COUNTS + n - 1];
+            let shown = count != 0 && count != 0xFF;
+            let Some(l) = self.rx_lists.iter().find(|l| usize::from(l.number) == n) else {
+                if shown {
+                    b[LIST_COUNTS + n - 1] = 0;
+                }
+                continue;
+            };
+            let want = RxList {
+                number: l.number,
+                name: l.name.clone(),
+                contacts: l
+                    .contacts
+                    .iter()
+                    .copied()
+                    .filter(|&x| x != 0)
+                    .take(32)
+                    .collect(),
+            };
+            let have = if shown {
+                Some(decode_list(l.number, &b[a..a + LIST_SIZE], count))
+            } else {
+                None
+            };
+            if have.is_none_or(|h| h.name != want.name || h.contacts != want.contacts) {
+                encode_list(&want, &mut b[a..a + LIST_SIZE]);
+                b[LIST_COUNTS + n - 1] = (want.contacts.len() + 1) as u8;
+            }
+        }
+
+        encode_general(&self.general, b);
+        self.fix_lucz(b);
+        img
+    }
+
+    /// The last used channel of each zone (7.3.10) must stay inside the zone; All Channels' must be a stored channel.
+    fn fix_lucz(&self, b: &mut [u8]) {
+        if &b[LUCZ..LUCZ + 4] != b"LUCZ" {
+            return;
+        }
+        for (slot, z) in self.zones.iter().enumerate().take(MAX_ZONES) {
+            if usize::from(b[LUCZ + 4 + slot]) >= z.channels.len() {
+                b[LUCZ + 4 + slot] = 0;
+            }
+        }
+        let all = u16::from(b[LUCZ + 72]) | (u16::from(b[LUCZ + 73]) << 8);
+        if !self.channels.iter().any(|c| c.number == all + 1) {
+            b[LUCZ + 72] = 0;
+            b[LUCZ + 73] = 0;
+        }
+    }
+}
+
+fn put_channel(r: &mut [u8], c: &Channel) {
+    let same = decode_channel(c.number, r).is_some_and(|h| same_channel(&h, c));
+    if !same {
+        encode_channel(c, r);
     }
 }
 
@@ -155,5 +299,136 @@ mod tests {
         let cp = Codeplug::decode(&Image::blank());
         assert!(cp.channels.is_empty() && cp.zones.is_empty() && cp.contacts.is_empty());
         let _ = get_tone;
+    }
+
+    #[test]
+    fn an_unedited_codeplug_encodes_to_the_same_bytes() {
+        let img = sample();
+        let out = Codeplug::decode(&img).encode(&img);
+        assert_eq!(out.bytes(), img.bytes());
+    }
+
+    fn changed(a: &Image, b: &Image) -> Vec<usize> {
+        a.bytes()
+            .iter()
+            .zip(b.bytes())
+            .enumerate()
+            .filter(|(_, (x, y))| x != y)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    #[test]
+    fn editing_a_channel_changes_only_its_record() {
+        let img = sample();
+        let mut cp = Codeplug::decode(&img);
+        cp.channels[0].name = "Renamed".into();
+        cp.channels[0].rx_tone = "D073N".into();
+        let out = cp.encode(&img);
+        let at = channel_addr(1);
+        assert!(changed(&img, &out)
+            .iter()
+            .all(|&i| (at..at + CH_SIZE).contains(&i)));
+        let back = Codeplug::decode(&out);
+        assert_eq!(
+            (
+                back.channels[0].name.as_str(),
+                back.channels[0].rx_tone.as_str()
+            ),
+            ("Renamed", "D073N")
+        );
+        assert_eq!(back.channels[0].tx_tone, "D265N");
+    }
+
+    #[test]
+    fn vendor_bytes_survive_an_edit() {
+        let mut img = sample();
+        let a = channel_addr(1);
+        img.bytes_mut()[a + 0x32] = 0x5A; // bytes no field covers
+        img.bytes_mut()[a + 0x34] = 0xA5;
+        let mut cp = Codeplug::decode(&img);
+        cp.channels[0].squelch = 7;
+        let out = cp.encode(&img);
+        assert_eq!(
+            (
+                out.bytes()[a + 0x32],
+                out.bytes()[a + 0x34],
+                out.bytes()[a + 0x37]
+            ),
+            (0x5A, 0xA5, 7)
+        );
+    }
+
+    #[test]
+    fn adding_and_deleting_records() {
+        let img = sample();
+        let mut cp = Codeplug::decode(&img);
+        // a new channel in slot 2, a new zone, a new contact, a new list
+        let mut c2 = cp.channels[0].clone();
+        c2.number = 2;
+        c2.name = "Second".into();
+        c2.rx_hz = 446_000_000;
+        c2.tx_hz = 446_000_000;
+        cp.channels.push(c2);
+        cp.zones.push(Zone {
+            slot: 1,
+            name: "Other".into(),
+            channels: vec![1, 2],
+        });
+        cp.contacts.push(Contact {
+            number: 2,
+            name: "Friend".into(),
+            id: 3_100_999,
+            call_type: CallType::Private,
+            timeslot: 0,
+        });
+        cp.rx_lists.push(RxList {
+            number: 1,
+            name: "FAV".into(),
+            contacts: vec![1, 2],
+        });
+        cp.general.radio_name = "N0CALL".into();
+        cp.general.dmr_id = 3_100_123;
+        let out = cp.encode(&img);
+        let back = Codeplug::decode(&out);
+        assert_eq!(back.channels.len(), 2);
+        assert_eq!(back.channel(2).unwrap().name, "Second");
+        assert_eq!(
+            back.zones
+                .iter()
+                .map(|z| z.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Main", "Other"]
+        );
+        assert_eq!(back.zones[1].channels, vec![1, 2]);
+        assert_eq!(back.contacts[1].id, 3_100_999);
+        assert_eq!(back.contacts[1].call_type, CallType::Private);
+        assert_eq!(
+            (
+                back.rx_lists[0].name.as_str(),
+                back.rx_lists[0].contacts.clone()
+            ),
+            ("FAV", vec![1, 2])
+        );
+        assert_eq!(
+            (back.general.radio_name.as_str(), back.general.dmr_id),
+            ("N0CALL", 3_100_123)
+        );
+        // and take them away again
+        let mut cp = back;
+        cp.channels.retain(|c| c.number != 2);
+        cp.zones.pop();
+        cp.contacts.retain(|c| c.number != 2);
+        cp.rx_lists.clear();
+        let gone = Codeplug::decode(&cp.encode(&out));
+        assert_eq!(
+            (
+                gone.channels.len(),
+                gone.zones.len(),
+                gone.contacts.len(),
+                gone.rx_lists.len()
+            ),
+            (1, 1, 1, 0)
+        );
     }
 }
