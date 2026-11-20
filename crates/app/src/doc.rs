@@ -171,4 +171,20 @@ mod tests {
         d.note(before, None);
         assert!(!d.can_undo());
     }
+
+    #[test]
+    fn setting_weather_channels_rx_only_makes_the_document_dirty() {
+        // Real data stays out of the repo: the test runs only when RFCPS_TEST_IMAGE names a codeplug image.
+        let Some(path) = std::env::var_os("RFCPS_TEST_IMAGE") else {
+            return;
+        };
+        let mut d = Doc::from_image(Image::from_bytes(&std::fs::read(path).unwrap()), "real".into());
+        assert!(!d.dirty());
+        d.mark_saved();
+        let before = d.cp.clone();
+        let n = rfcps_core::freqs::set_weather_rx_only(&mut d.cp);
+        d.note(before, None);
+        assert!(n > 0, "no weather channels found");
+        assert!(d.dirty(), "the edit did not make the document dirty");
+    }
 }
