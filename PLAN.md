@@ -18,7 +18,7 @@ Flashing firmware (it can brick a radio), the DMR ID database download, Android 
 | # | Phase | Result | Rough effort |
 |---|---|---|---|
 | 0 | Scaffold, toolchain, Windows type-check | window opens on Linux (done: compiles for Linux and Windows) | days |
-| 1 | `rfcps-core`: the codeplug image (channels, contacts, zones, groups, settings) from `docs/spec/` | decode and encode a real radio image, round trip is exact | 3-5 weeks |
+| 1 | `rfcps-core`: the codeplug image (channels, contacts, zones, groups, settings) from `docs/spec/` | decode and encode a real radio image, round trip is exact | 3-5 weeks. **Decode done** for channels, zones, contacts, RX lists and general settings: matches the web editor on a real DM-32UV image. Encode, APRS, DTMF, VFOs, keyed settings and the channel modes (P25, NXDN, Tier III) to do |
 | 2 | `rfcps-link`: read and write over the programming cable | reads the radio's codeplug to a file and writes it back, byte for byte | 1-2 weeks |
 | 3 | GUI: tables for channels, contacts, zones; edit, undo, validation ("problems" list) | edit a channel and write it | 4-8 weeks |
 | 4 | Import and export: CSV, CHIRP, qdmr YAML, the stock DM-32UV codeplug | open a stock backup | 2-4 weeks |
