@@ -572,3 +572,110 @@ fn systems_encode_like_the_web_editor() {
     assert_eq!(cp.channel(6).unwrap().kind(), 0);
     same(&cp.encode(&one), &want("sys3.bin"), "the system deleted");
 }
+
+/// Tier III (dmr-trunking-codeplug.md): a system with every field set, two channels and a key (with a PSN), a channel on
+/// it, edits and a delete that also takes the system's own records, as whole images against the web editor's.
+/// `RFCPS_T3_DIR` holds the web editor's images (`edit_t3.mjs`, see `docs/testing.md`).
+#[test]
+fn tier_iii_systems_encode_like_the_web_editor() {
+    use rfcps_core::kv;
+    use rfcps_core::modes;
+    use rfcps_core::records::Mode;
+    use rfcps_core::systems::{self, EntryBody, SysEntry, System, SystemFields, T3Key, T3System};
+    let (Ok(img_path), Ok(dir)) = (std::env::var("RFCPS_IMAGE"), std::env::var("RFCPS_T3_DIR")) else {
+        eprintln!("RFCPS_IMAGE / RFCPS_T3_DIR not set: skipped");
+        return;
+    };
+    let want = |n: &str| Image::from_bytes(&std::fs::read(format!("{dir}/{n}")).unwrap());
+    let base = Image::from_bytes(&std::fs::read(img_path).unwrap());
+    let same = |got: &Image, w: &Image, what: &str| {
+        let diff: Vec<usize> = (0..got.bytes().len()).filter(|&i| got.bytes()[i] != w.bytes()[i]).collect();
+        assert!(diff.is_empty(), "{what}: {} bytes differ, first at {:#x}", diff.len(), diff[0]);
+    };
+    let pos = |cp: &Codeplug, n: u16| cp.channels.iter().position(|c| c.number == n).unwrap();
+    let chan = |control, lcn, rx_hz, tx_hz, cc| SysEntry {
+        cls: 0,
+        group: 0xFF,
+        control,
+        flags: 0,
+        body: EntryBody::T3Channel { lcn, rx_hz, tx_hz, cc },
+        raw: Vec::new(),
+    };
+    let key = |psn| T3Key { key: systems::parse_key_hex("00112233445566778899AABBCCDDEEFF").unwrap(), psn };
+
+    // 1: a system with every field set, two channels and a key; channel 6 on it
+    let mut cp = Codeplug::decode(&base);
+    let mut s = System::new(systems::SYSTEM_T3, "TestT3");
+    s.number = 1;
+    assert!(s.tx, "a new Tier III system is transmit-capable, as in the web editor");
+    s.fields = SystemFields::T3(T3System {
+        model: 1,
+        net: 5,
+        category_b: true,
+        color_code: 3,
+        all_calls: true,
+        private_calls: true,
+        register_talkgroups: true,
+        no_roaming: true,
+        fallback_hold: 7,
+        plan_base_hz: 440_000_000,
+        plan_first_lcn: 2,
+        plan_sep: 3,
+        plan_tx_low: true,
+        plan_split_hz: 5_000_000,
+        leave_dbm: -85,
+        power_save: 2,
+        sites: vec![3, 7],
+        ..T3System::default()
+    });
+    s.needs_key = true;
+    s.entries.push(chan(true, 1, 438_100_000, 443_100_000, None));
+    s.entries.push(chan(false, 2, 438_125_000, 443_125_000, Some(5)));
+    s.secret = Some(systems::encode_t3_key(&key(0x010203), None));
+    cp.systems.push(s);
+    let i6 = pos(&cp, 6);
+    let sys = cp.systems.clone();
+    modes::set_kind(&mut cp.channels[i6], modes::KIND_T3, Mode::Dmr, &sys);
+    assert!(cp.channels[i6].tagged.as_ref().unwrap().tx, "a new Tier III channel may transmit, as in the web editor");
+    let one = cp.encode(&base);
+    same(&one, &want("t3_1.bin"), "a Tier III system and a channel on it");
+
+    // It reads back as written; re-encoding changes nothing.
+    let back = Codeplug::decode(&one);
+    assert_eq!(back.systems[0].fields, cp.systems[0].fields);
+    assert_eq!(systems::decode_t3_key(back.systems[0].secret.as_deref().unwrap()), Some(key(0x010203)));
+    assert_eq!(back.channel(6).unwrap().kind(), modes::KIND_T3);
+    assert_eq!(back.encode(&one).bytes(), one.bytes(), "re-encoding the decoded image changes nothing");
+
+    // The system's own records, as another tool would have put them.
+    let mut b = one.bytes().to_vec();
+    let entries = kv::entries_for_write(&b).unwrap();
+    let mut with = kv::set_value(&entries, systems::T3_POLL_KEY, &[1, 2, 3]);
+    with = kv::set_value(&with, systems::T3_SUPL_KEY, &[4, 5, 6, 7]);
+    assert!(kv::put_entries(&mut b, &entries, &with));
+    let owned = Image::from_bytes(&b);
+    same(&owned, &want("t3_1b.bin"), "the system's own records");
+
+    // 2: renamed, listen only, more options, a third channel, the PSN dropped, no fallback on the channel
+    let mut cp = Codeplug::decode(&owned);
+    cp.systems[0].name = "RenamedT3".into();
+    cp.systems[0].tx = false;
+    if let SystemFields::T3(f) = &mut cp.systems[0].fields {
+        f.accept_kill = true;
+        f.sites = vec![3];
+        f.leave_dbm = -70;
+    }
+    cp.systems[0].entries.push(chan(false, 3, 438_150_000, 443_150_000, None));
+    cp.systems[0].secret = Some(systems::encode_t3_key(&key(0), cp.systems[0].secret.as_deref()));
+    let i6 = pos(&cp, 6);
+    cp.channels[i6].tagged.as_mut().unwrap().no_fallback = true;
+    same(&cp.encode(&owned), &want("t3_2.bin"), "edits");
+
+    // 3: the system deleted: its secret and own records go with it
+    let mut cp = Codeplug::decode(&owned);
+    cp.remove_system(1);
+    let gone = cp.encode(&owned);
+    same(&gone, &want("t3_3.bin"), "the system deleted");
+    let area = kv::decode_area(gone.bytes());
+    assert!(area.entries.iter().all(|e| !(0x0100..0x0400).contains(&e.key) && e.key != 0x0800 && e.key != 0x0900 || (0x0400..0x0800).contains(&e.key)));
+}

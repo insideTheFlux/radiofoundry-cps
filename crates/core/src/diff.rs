@@ -272,7 +272,7 @@ pub fn changes(old: &Codeplug, new: &Codeplug) -> Vec<Change> {
                 {
                     f.push("sites, control channels or plan");
                 }
-                if o.secret.is_some() != n.secret.is_some() {
+                if o.secret != n.secret {
                     f.push("secret");
                 }
                 if f.is_empty() {

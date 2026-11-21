@@ -44,7 +44,7 @@ pub fn kind_name(kind: u8) -> &'static str {
 }
 
 /// Kinds a new channel can be made in this editor.
-pub const EDITABLE_KINDS: [u8; 3] = [KIND_P25, KIND_NXDN, KIND_P25_TRUNK];
+pub const EDITABLE_KINDS: [u8; 4] = [KIND_P25, KIND_NXDN, KIND_P25_TRUNK, KIND_T3];
 
 // --- Bytes ---
 
@@ -273,6 +273,8 @@ pub enum Params {
     Nxdn(NxdnConv),
     /// A P25 trunked channel (p25-codeplug.md 4): follow every group of the system.
     P25Trunk(P25TrunkChan),
+    /// A Tier III channel (dmr-trunking-codeplug.md 4): no parameter block, so the block as stored is kept.
+    T3,
     /// A kind this editor doesn't edit: its tag is kept as found.
     Unknown,
 }
@@ -289,6 +291,7 @@ pub fn decode_params(kind: u8, block: &[u8]) -> Params {
         KIND_P25 => Params::P25(decode_p25(block)),
         KIND_NXDN => Params::Nxdn(decode_nxdn(block)),
         KIND_P25_TRUNK => Params::P25Trunk(P25TrunkChan { follow_all: u8_at(block, 0) & 1 != 0 }),
+        KIND_T3 => Params::T3,
         _ => Params::Unknown,
     }
 }
@@ -303,6 +306,8 @@ fn encode_params(p: &Params, prev: Option<&[u8]>) -> Option<Vec<u8>> {
             v[0] = (v[0] & !1) | u8::from(x.follow_all);
             Some(v)
         }
+        // A Tier III channel has no block of its own: what is stored stays.
+        Params::T3 => Some(prev.map_or_else(Vec::new, <[u8]>::to_vec)),
         Params::Unknown => None,
     }
 }
@@ -313,6 +318,7 @@ pub fn new_params(kind: u8) -> Params {
         KIND_P25 => Params::P25(P25Conv::default()),
         KIND_NXDN => Params::Nxdn(NxdnConv::default()),
         KIND_P25_TRUNK => Params::P25Trunk(P25TrunkChan::default()),
+        KIND_T3 => Params::T3,
         _ => Params::Unknown,
     }
 }
@@ -340,7 +346,7 @@ pub struct Tagged {
     /// The record stands on its own (flag bit 1): it is a real FM or DMR channel too.
     pub base_own: bool,
     pub fallback: Fallback,
-    /// Kind bit 4 of a P25 trunked channel: no fallback on this channel.
+    /// Kind bit 4 of a trunked channel (P25 trunked, Tier III): no fallback on this channel.
     pub no_fallback: bool,
     pub params: Params,
     /// The tag as read: the bytes no field covers come from here when the channel is written.
@@ -375,7 +381,9 @@ pub fn stand_in(c: &mut Channel, systems: &[System]) {
     if !own_freqs(t.kind) {
         let ctl = channel_system(c, systems).and_then(|s| {
             s.entries.iter().find_map(|e| match &e.body {
-                EntryBody::P25Control { rx_hz, tx_hz, .. } if e.cls == 0 && e.control && *rx_hz != 0 => {
+                EntryBody::P25Control { rx_hz, tx_hz, .. } | EntryBody::T3Channel { rx_hz, tx_hz, .. }
+                    if e.cls == 0 && e.control && *rx_hz != 0 =>
+                {
                     Some((*rx_hz, *tx_hz))
                 }
                 _ => None,
@@ -412,17 +420,20 @@ pub fn set_kind(c: &mut Channel, kind: u8, mode: Mode, systems: &[System]) {
     let tx = c.tagged.as_ref().map_or(!c.rx_only, |t| t.tx);
     set_kind(c, 0, Mode::Dmr, systems);
     // A kind that runs on a system starts on the first system of its type, if there is one.
-    let system = match kind {
-        KIND_P25_TRUNK => systems
-            .iter()
-            .find(|s| s.type_id == systems::SYSTEM_P25_TRUNK && (1..=255).contains(&s.number))
-            .map_or(0xFF, |s| (s.number - 1) as u8),
-        _ => 0xFF,
+    let want = match kind {
+        KIND_P25_TRUNK => Some(systems::SYSTEM_P25_TRUNK),
+        KIND_T3 => Some(systems::SYSTEM_T3),
+        _ => None,
     };
+    let system = want
+        .and_then(|t| systems.iter().find(|s| s.type_id == t && (1..=255).contains(&s.number)))
+        .map_or(0xFF, |s| (s.number - 1) as u8);
     c.tagged = Some(Tagged {
         kind,
         system,
-        tx: matches!(kind, KIND_P25 | KIND_NXDN) && tx,
+        // Transmit allowed starts as the channel's own where the kind transmits by default (a Tier III site grants
+        // every transmission); a P25 trunked channel starts receive only.
+        tx: matches!(kind, KIND_P25 | KIND_NXDN | KIND_T3) && tx,
         base_own: false,
         fallback: Fallback::None,
         no_fallback: false,
@@ -453,7 +464,7 @@ pub fn decode_tags(channels: &mut [Channel], entries: &[Entry]) {
             tx: t.flags & TAG_TX != 0,
             base_own: t.flags & TAG_BASE_OWN != 0,
             fallback: Fallback::None,
-            no_fallback: t.kind == KIND_P25_TRUNK && t.flags & TAG_KIND_BIT4 != 0,
+            no_fallback: matches!(t.kind, KIND_P25_TRUNK | KIND_T3) && t.flags & TAG_KIND_BIT4 != 0,
             params: decode_params(t.kind, &t.params),
             raw: raw.to_vec(),
         });
@@ -614,7 +625,7 @@ pub fn mode_entries(
             flags |= TAG_BASE_OWN;
         }
         let (fb_chan, fb_check) = fallback_out(&tg.fallback, &names, src.as_ref());
-        if tg.kind == KIND_P25_TRUNK {
+        if matches!(tg.kind, KIND_P25_TRUNK | KIND_T3) {
             flags = if tg.no_fallback { flags | TAG_KIND_BIT4 } else { flags & !TAG_KIND_BIT4 };
         }
         if fb_chan != 0 {

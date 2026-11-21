@@ -43,6 +43,8 @@ pub struct Problem {
 
 const NAME_MAX: usize = 16;
 const ID_MAX: u32 = 0xFF_FFFF;
+/// The highest DMR ID a system's own ID may be (the settings area's `ID_MAX`).
+const ID_MAX_T3: u32 = 16_776_415;
 
 /// Everything wrong or doubtful about a codeplug. `bands` are the radio's frequency ranges in Hz, when known.
 pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
@@ -331,6 +333,8 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                     add(warn, Table::Channels, n, name, "The talk group is above 65535: the channel calls talk group 1.".into());
                 }
             }
+            // A Tier III channel has no parameters to check.
+            Params::T3 => {}
             Params::Unknown => {
                 if !(1..=4).contains(&t.kind) {
                     add(warn, Table::Channels, n, name, format!("The channel is of a mode this editor does not know (kind {}); it is kept as it is.", t.kind));
@@ -416,6 +420,40 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                         add(warn, Table::Systems, n, name, "A control channel has no frequency.".into());
                     }
                 }
+            }
+        }
+        if let SystemFields::T3(f) = &s.fields {
+            if f.net > systems::net_max(f.model) {
+                add(err, Table::Systems, n, name, format!("The NET is above {} for this network model.", systems::net_max(f.model)));
+            }
+            if f.sites.len() > systems::T3_SITES {
+                add(err, Table::Systems, n, name, format!("{} sites; the most is {}.", f.sites.len(), systems::T3_SITES));
+            }
+            if f.sites.iter().any(|x| *x > systems::site_max(f.model)) {
+                add(err, Table::Systems, n, name, format!("A site value is above {} for this network model.", systems::site_max(f.model)));
+            }
+            let ctl = s.entries.iter().filter(|e| e.cls == 0 && e.control).count();
+            if ctl > systems::T3_CTRL {
+                add(warn, Table::Systems, n, name, format!("More than {} control channels: the extra ones are skipped.", systems::T3_CTRL));
+            }
+            if ctl == 0 {
+                add(warn, Table::Systems, n, name, "The system has no control channel.".into());
+            }
+            if s.own_id > ID_MAX_T3 {
+                add(err, Table::Systems, n, name, format!("The radio's ID on the system is above {ID_MAX_T3}."));
+            }
+            for e in &s.entries {
+                if let EntryBody::T3Channel { lcn, rx_hz, .. } = &e.body {
+                    if !(1..=systems::T3_LCN).contains(lcn) {
+                        add(err, Table::Systems, n, name, format!("An LCN is outside 1 to {}.", systems::T3_LCN));
+                    }
+                    if *rx_hz == 0 {
+                        add(warn, Table::Systems, n, name, "A channel has no receive frequency.".into());
+                    }
+                }
+            }
+            if s.secret.as_deref().is_some_and(|v| systems::decode_t3_key(v).is_none()) {
+                add(err, Table::Systems, n, name, "The key is shorter than 16 octets.".into());
             }
         }
         if s.needs_key && s.secret.is_none() {
@@ -806,5 +844,36 @@ mod tests {
         assert!(m.iter().any(|x| x.contains("has no name")), "{m:?}");
         // The same identity (both any) is the same system.
         assert!(m.iter().any(|x| x.contains("same identity")), "{m:?}");
+    }
+
+    #[test]
+    fn tier_iii_system_problems() {
+        use crate::systems::{EntryBody, SysEntry, System, SystemFields, T3System, SYSTEM_T3};
+        let mut c = cp();
+        let mut s = System::new(SYSTEM_T3, "Net T3");
+        s.number = 1;
+        s.fields = SystemFields::T3(T3System { model: 3, net: 9, sites: vec![2000; 9], ..T3System::default() });
+        s.secret = Some(vec![1; 8]); // shorter than 16 octets: not a key
+        let ch = |control, lcn| SysEntry { cls: 0, group: 0xFF, control, flags: 0, body: EntryBody::T3Channel { lcn, rx_hz: 0, tx_hz: 0, cc: None }, raw: Vec::new() };
+        s.entries = (0..5).map(|i| ch(true, i + 1)).collect();
+        s.entries.push(ch(false, 5000));
+        c.systems = vec![s];
+        let m: Vec<String> = validate(&c, None).into_iter().map(|p| p.message).collect();
+        assert!(m.iter().any(|x| x.contains("NET is above 3")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("9 sites")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("site value is above 1023")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("More than 4 control channels")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("LCN is outside")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("shorter than 16 octets")), "{m:?}");
+        // A tidy one has none of them.
+        let mut ok = cp();
+        let mut s = System::new(SYSTEM_T3, "Good");
+        s.number = 1;
+        s.entries = vec![ch(true, 1)];
+        if let EntryBody::T3Channel { rx_hz, .. } = &mut s.entries[0].body {
+            *rx_hz = 438_100_000;
+        }
+        ok.systems = vec![s];
+        assert!(validate(&ok, None).iter().all(|x| x.table != Table::Systems), "{:?}", validate(&ok, None));
     }
 }

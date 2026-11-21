@@ -17,6 +17,9 @@ use std::collections::HashMap;
 pub const SYSTEM_KEY: u16 = 0x0100;
 pub const ENTRY_KEY: u16 = 0x0200;
 pub const SECRET_KEY: u16 = 0x0300;
+/// Tier III's own records of system n (kept as stored, removed with the system).
+pub const T3_POLL_KEY: u16 = 0x0800;
+pub const T3_SUPL_KEY: u16 = 0x0900;
 pub const MAX_SYSTEMS: usize = 255;
 pub const MAX_ENTRIES: usize = 256;
 const SYS_HDR: usize = 28;
@@ -31,11 +34,12 @@ pub const SHARE_OFF: u8 = 0;
 pub const SHARE_IDENTITY: u8 = 1;
 pub const SHARE_WHOLE: u8 = 2;
 
+pub const SYSTEM_T3: u8 = 1;
 pub const SYSTEM_P25_TRUNK: u8 = 3;
 
 pub fn type_name(t: u8) -> &'static str {
     match t {
-        1 => "T3",
+        SYSTEM_T3 => "T3",
         SYSTEM_P25_TRUNK => "P25T",
         _ => "?",
     }
@@ -108,16 +112,256 @@ pub fn encode_p25_trunk(s: &P25Trunk, prev: Option<&[u8]>) -> Vec<u8> {
     v
 }
 
+// --- The DMR Tier III system's block (dmr-trunking-codeplug.md 1) ---
+
+pub const T3_BLOCK: usize = 39;
+pub const T3_SITES: usize = 8;
+pub const T3_LCN: u16 = 4094;
+/// A system takes this many control channels; more are skipped.
+pub const T3_CTRL: usize = 4;
+const T3_ID_LEN: u8 = 4;
+/// The network model's NET and site bits: tiny, small, large, huge.
+const NET_BITS: [u32; 4] = [9, 7, 4, 2];
+
+/// The most a NET number can be in a network model.
+pub fn net_max(model: u8) -> u16 {
+    ((1u32 << NET_BITS[usize::from(model & 3)]) - 1) as u16
+}
+
+/// The most a site value can be in a network model.
+pub fn site_max(model: u8) -> u16 {
+    ((1u32 << (12 - NET_BITS[usize::from(model & 3)])) - 1) as u16
+}
+
+/// The options word's named bits (the others are kept as stored).
+pub const OPT_ALL_CALLS: u16 = 0x0002;
+pub const OPT_EMERGENCY_ANY: u16 = 0x0004;
+pub const OPT_PRIVATE_CALLS: u16 = 0x0020;
+pub const OPT_REGISTER_TALKGROUPS: u16 = 0x0040;
+pub const OPT_ACCEPT_ALS: u16 = 0x0080;
+pub const OPT_ACCEPT_KILL: u16 = 0x0100;
+pub const OPT_NO_ROAMING: u16 = 0x0200;
+pub const OPT_ACCEPT_STUN: u16 = 0x0400;
+pub const OPT_IP_GATEWAY: u16 = 0x1000;
+const OPT_MASK: u16 = OPT_ALL_CALLS
+    | OPT_EMERGENCY_ANY
+    | OPT_PRIVATE_CALLS
+    | OPT_REGISTER_TALKGROUPS
+    | OPT_ACCEPT_ALS
+    | OPT_ACCEPT_KILL
+    | OPT_NO_ROAMING
+    | OPT_ACCEPT_STUN
+    | OPT_IP_GATEWAY;
+
+/// A DMR Tier III system: the network, the options, the fixed channel plan and the sites the radio may use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct T3System {
+    /// 0 tiny, 1 small, 2 large, 3 huge.
+    pub model: u8,
+    pub net: u16,
+    /// Category B (else A).
+    pub category_b: bool,
+    pub color_code: u8,
+    pub all_calls: bool,
+    pub emergency_any: bool,
+    pub private_calls: bool,
+    pub register_talkgroups: bool,
+    pub accept_als: bool,
+    pub accept_kill: bool,
+    pub no_roaming: bool,
+    pub accept_stun: bool,
+    pub ip_gateway: bool,
+    /// Seconds on the fallback channel before the system is tried again; 0 = 30.
+    pub fallback_hold: u8,
+    /// The fixed plan: the MS transmit frequency of the first channel (0 = no fixed plan), its LCN, the separation
+    /// code (an index into 5, 6.25, 10, 12.5, 15, 20, 25, 30 kHz), the duplex split and the two plan flags.
+    pub plan_base_hz: u32,
+    pub plan_first_lcn: u16,
+    pub plan_sep: u8,
+    pub plan_tx_low: bool,
+    pub plan_no_learn: bool,
+    pub plan_split_hz: u32,
+    /// Weak below this dBm; 0 = the radio's roaming threshold.
+    pub leave_dbm: i8,
+    /// Power save asked for at registration: 0 off, 1-7 = 1:2 to 1:128.
+    pub power_save: u8,
+    /// The site values the radio may use (8 at most); empty = any.
+    pub sites: Vec<u16>,
+}
+
+impl Default for T3System {
+    /// A new system, as the web editor makes one: model tiny, NET 0, category A, color code 1, private calls on.
+    fn default() -> Self {
+        Self {
+            model: 0,
+            net: 0,
+            category_b: false,
+            color_code: 1,
+            all_calls: false,
+            emergency_any: false,
+            private_calls: true,
+            register_talkgroups: false,
+            accept_als: false,
+            accept_kill: false,
+            no_roaming: false,
+            accept_stun: false,
+            ip_gateway: false,
+            fallback_hold: 0,
+            plan_base_hz: 0,
+            plan_first_lcn: 0,
+            plan_sep: 0,
+            plan_tx_low: false,
+            plan_no_learn: false,
+            plan_split_hz: 0,
+            leave_dbm: 0,
+            power_save: 0,
+            sites: Vec::new(),
+        }
+    }
+}
+
+pub fn decode_t3(v: &[u8]) -> T3System {
+    let opts = u16_at(v, 5);
+    let has = |bit: u16| opts & bit != 0;
+    let ps = u8_at(v, 21);
+    T3System {
+        model: u8_at(v, 0) & 3,
+        net: u16_at(v, 1),
+        category_b: u8_at(v, 3) == 2,
+        color_code: u8_at(v, 4) & 0x0F,
+        all_calls: has(OPT_ALL_CALLS),
+        emergency_any: has(OPT_EMERGENCY_ANY),
+        private_calls: has(OPT_PRIVATE_CALLS),
+        register_talkgroups: has(OPT_REGISTER_TALKGROUPS),
+        accept_als: has(OPT_ACCEPT_ALS),
+        accept_kill: has(OPT_ACCEPT_KILL),
+        no_roaming: has(OPT_NO_ROAMING),
+        accept_stun: has(OPT_ACCEPT_STUN),
+        ip_gateway: has(OPT_IP_GATEWAY),
+        fallback_hold: u8_at(v, 7),
+        plan_base_hz: u32_at(v, 8),
+        plan_first_lcn: u16_at(v, 12),
+        plan_sep: u8_at(v, 14) & 7,
+        plan_tx_low: u8_at(v, 15) & 1 != 0,
+        plan_no_learn: u8_at(v, 15) & 2 != 0,
+        plan_split_hz: u32_at(v, 16),
+        leave_dbm: s8_at(v, 20),
+        power_save: if ps <= 7 { ps } else { 0 },
+        sites: (0..usize::from(u8_at(v, 22)).min(T3_SITES)).map(|i| u16_at(v, 23 + 2 * i)).collect(),
+    }
+}
+
+pub fn encode_t3(s: &T3System, prev: Option<&[u8]>) -> Vec<u8> {
+    let mut v = grow(prev, T3_BLOCK);
+    v[0] = (v[0] & !3) | (s.model & 3);
+    v[1..3].copy_from_slice(&s.net.to_le_bytes());
+    v[3] = if s.category_b { 2 } else { 1 };
+    v[4] = s.color_code & 0x0F;
+    let bits = [
+        (s.all_calls, OPT_ALL_CALLS),
+        (s.emergency_any, OPT_EMERGENCY_ANY),
+        (s.private_calls, OPT_PRIVATE_CALLS),
+        (s.register_talkgroups, OPT_REGISTER_TALKGROUPS),
+        (s.accept_als, OPT_ACCEPT_ALS),
+        (s.accept_kill, OPT_ACCEPT_KILL),
+        (s.no_roaming, OPT_NO_ROAMING),
+        (s.accept_stun, OPT_ACCEPT_STUN),
+        (s.ip_gateway, OPT_IP_GATEWAY),
+    ]
+    .iter()
+    .fold(0u16, |a, &(on, bit)| a | if on { bit } else { 0 });
+    let opts = (u16_at(&v, 5) & !OPT_MASK) | bits;
+    v[5..7].copy_from_slice(&opts.to_le_bytes());
+    v[7] = s.fallback_hold;
+    v[8..12].copy_from_slice(&s.plan_base_hz.to_le_bytes());
+    v[12..14].copy_from_slice(&s.plan_first_lcn.to_le_bytes());
+    v[14] = s.plan_sep & 7;
+    v[15] = (v[15] & !3) | u8::from(s.plan_tx_low) | (u8::from(s.plan_no_learn) << 1);
+    v[16..20].copy_from_slice(&s.plan_split_hz.to_le_bytes());
+    v[20] = s.leave_dbm as u8;
+    v[21] = s.power_save & 7;
+    let sites = &s.sites[..s.sites.len().min(T3_SITES)];
+    v[22] = sites.len() as u8;
+    v[23..39].fill(0);
+    for (i, x) in sites.iter().enumerate() {
+        v[23 + 2 * i..25 + 2 * i].copy_from_slice(&x.to_le_bytes());
+    }
+    v
+}
+
+// --- The Tier III key (dmr-trunking-codeplug.md 3) ---
+
+/// The system's key: 16 octets (the first the most significant), and the PSN (3 octets; 0 = none).
+#[derive(Clone, PartialEq, Eq)]
+pub struct T3Key {
+    pub key: [u8; 16],
+    pub psn: u32,
+}
+
+// A key never prints: it is a secret.
+impl std::fmt::Debug for T3Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("T3Key(..)")
+    }
+}
+
+/// The key a secret holds; `None` when it is shorter than 16 octets (no key).
+pub fn decode_t3_key(v: &[u8]) -> Option<T3Key> {
+    if v.len() < 16 {
+        return None;
+    }
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&v[..16]);
+    let psn = if v.len() >= 19 { (u32::from(v[16]) << 16) | (u32::from(v[17]) << 8) | u32::from(v[18]) } else { 0 };
+    Some(T3Key { key, psn })
+}
+
+/// The secret for a key: 16 octets with no PSN, else 19; octets after the PSN of a stored longer secret are kept.
+pub fn encode_t3_key(k: &T3Key, prev: Option<&[u8]>) -> Vec<u8> {
+    let mut v = if k.psn != 0 {
+        grow(prev.filter(|p| p.len() >= 19), 19)
+    } else {
+        vec![0u8; 16]
+    };
+    v[..16].copy_from_slice(&k.key);
+    if k.psn != 0 {
+        v[16] = (k.psn >> 16) as u8;
+        v[17] = (k.psn >> 8) as u8;
+        v[18] = k.psn as u8;
+    }
+    v
+}
+
+/// The key as 32 hex digits, upper case.
+pub fn key_hex(k: &[u8; 16]) -> String {
+    k.iter().map(|b| format!("{b:02X}")).collect()
+}
+
+/// 32 hex digits (spaces, colons and dashes ignored) as a key; `None` for anything else.
+pub fn parse_key_hex(text: &str) -> Option<[u8; 16]> {
+    let t: String = text.chars().filter(|c| !matches!(c, ' ' | ':' | '-' | '\t')).collect();
+    if t.len() != 32 || !t.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&t[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
 /// A system's type-specific fields: those of a type this editor edits, else the block as stored (kept).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SystemFields {
     P25Trunk(P25Trunk),
+    T3(T3System),
     Unknown,
 }
 
 fn decode_fields(type_id: u8, block: &[u8]) -> SystemFields {
     match type_id {
         SYSTEM_P25_TRUNK => SystemFields::P25Trunk(decode_p25_trunk(block)),
+        SYSTEM_T3 => SystemFields::T3(decode_t3(block)),
         _ => SystemFields::Unknown,
     }
 }
@@ -125,13 +369,18 @@ fn decode_fields(type_id: u8, block: &[u8]) -> SystemFields {
 fn encode_fields(f: &SystemFields, prev: Option<&[u8]>) -> Option<Vec<u8>> {
     match f {
         SystemFields::P25Trunk(x) => Some(encode_p25_trunk(x, prev)),
+        SystemFields::T3(x) => Some(encode_t3(x, prev)),
         SystemFields::Unknown => None,
     }
 }
 
 /// The identity length of a type the editor knows (7.1).
 fn id_len(type_id: u8) -> Option<u8> {
-    (type_id == SYSTEM_P25_TRUNK).then_some(P25_ID_LEN)
+    match type_id {
+        SYSTEM_P25_TRUNK => Some(P25_ID_LEN),
+        SYSTEM_T3 => Some(T3_ID_LEN),
+        _ => None,
+    }
 }
 
 /// Whether a type is one this editor edits.
@@ -143,6 +392,7 @@ pub fn type_known(type_id: u8) -> bool {
 pub fn new_fields(type_id: u8) -> SystemFields {
     match type_id {
         SYSTEM_P25_TRUNK => SystemFields::P25Trunk(P25Trunk::default()),
+        SYSTEM_T3 => SystemFields::T3(T3System::default()),
         _ => SystemFields::Unknown,
     }
 }
@@ -159,6 +409,9 @@ pub enum EntryBody {
     P25Site { rfss: Option<u8>, site: Option<u8> },
     /// P25 channel identifier plan row (class 2): the group is the identifier.
     P25Plan { base_hz: u32, spacing_hz: u32, tx_offset_hz: i32, bw_hz: u32, tdma: bool, slots: u8 },
+    /// Tier III channel (class 0): the LCN, the frequencies of the mobile station's receive and transmit sides, and its
+    /// color code (`None` = the system's). A control channel is flagged on the entry.
+    T3Channel { lcn: u16, rx_hz: u32, tx_hz: u32, cc: Option<u8> },
     /// A class this editor doesn't edit: kept as stored.
     Other,
 }
@@ -217,6 +470,13 @@ fn decode_entry(type_id: u8, cls: u8, group: u8, flags: u8, body: &[u8], raw: &[
             }
             _ => EntryBody::Other,
         }
+    } else if type_id == SYSTEM_T3 && cls == 0 {
+        EntryBody::T3Channel {
+            lcn: u16_at(body, 0),
+            rx_hz: u32_at(body, 2),
+            tx_hz: u32_at(body, 6),
+            cc: (body.len() >= 11 && u8_at(body, 10) != 0xFF).then(|| u8_at(body, 10) & 0x0F),
+        }
     } else {
         EntryBody::Other
     };
@@ -256,6 +516,13 @@ fn encode_entry(type_id: u8, n: u8, e: &SysEntry) -> Vec<u8> {
             body[16] = u8::from(*tdma);
             body[17] = if *tdma { *slots } else { 0 };
         }
+        EntryBody::T3Channel { lcn, rx_hz, tx_hz, cc } => {
+            body = grow(Some(&body), 11);
+            body[0..2].copy_from_slice(&lcn.to_le_bytes());
+            body[2..6].copy_from_slice(&rx_hz.to_le_bytes());
+            body[6..10].copy_from_slice(&tx_hz.to_le_bytes());
+            body[10] = cc.map_or(0xFF, |c| c & 0x0F);
+        }
         EntryBody::Other => {}
     }
     let mut v = vec![n, e.cls, e.group, (e.flags & !1) | u8::from(e.control)];
@@ -288,7 +555,7 @@ pub struct System {
 }
 
 impl System {
-    /// A new system of `type_id`: listen only until the user turns the transmit side on.
+    /// A new system of `type_id`.
     pub fn new(type_id: u8, name: &str) -> Self {
         Self {
             number: 0,
@@ -296,7 +563,9 @@ impl System {
             name: name.to_string(),
             sharing: SHARE_IDENTITY,
             own_id: 0,
-            tx: false,
+            // As the web editor makes them: a Tier III system is transmit-capable (a site grants every
+            // transmission), a P25 trunked one listen only until the user turns the transmit side on.
+            tx: type_id == SYSTEM_T3,
             needs_key: false,
             flags_raw: 0,
             fallback: Fallback::None,
@@ -448,8 +717,14 @@ pub fn system_entries(
         let Some(s) = valid.iter().find(|s| s.number == n as u16 + 1) else {
             // A system the model no longer has was deleted: its secret with it.
             if prev.as_deref().and_then(decode_header).is_some() {
+                let was_t3 = prev.as_deref().and_then(decode_header).is_some_and(|h| h.type_id == SYSTEM_T3);
                 crate::modes::del(&mut out, key);
                 crate::modes::del(&mut out, SECRET_KEY + n as u16);
+                // Tier III's own records (the short data poll and the supplementary data) go with the system.
+                if was_t3 {
+                    crate::modes::del(&mut out, T3_POLL_KEY + n as u16);
+                    crate::modes::del(&mut out, T3_SUPL_KEY + n as u16);
+                }
             }
             continue;
         };
@@ -498,5 +773,117 @@ pub fn number_systems(systems: &mut [System]) {
         }
         s.number = if usize::from(n) <= MAX_SYSTEMS { n } else { 0 };
         taken.push(n);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tier_iii_block_round_trips_and_keeps_the_option_bits_it_does_not_know() {
+        let s = T3System {
+            model: 2,
+            net: 9,
+            category_b: true,
+            color_code: 7,
+            all_calls: true,
+            accept_kill: true,
+            ip_gateway: true,
+            fallback_hold: 5,
+            plan_base_hz: 450_000_000,
+            plan_first_lcn: 3,
+            plan_sep: 6,
+            plan_tx_low: true,
+            plan_no_learn: true,
+            plan_split_hz: 5_000_000,
+            leave_dbm: -90,
+            power_save: 3,
+            sites: vec![1, 2, 15],
+            ..T3System::default()
+        };
+        let v = encode_t3(&s, None);
+        assert_eq!(v.len(), T3_BLOCK);
+        assert_eq!(decode_t3(&v), s);
+        // Option bits this editor doesn't know (0x8001 here) survive an edit of the ones it does.
+        let mut prev = v.clone();
+        prev[5] |= 0x01;
+        prev[6] |= 0x80;
+        let mut t = s.clone();
+        t.all_calls = false;
+        let w = encode_t3(&t, Some(&prev));
+        assert_eq!(u16_at(&w, 5) & 0x8001, 0x8001);
+        assert_eq!(u16_at(&w, 5) & OPT_ALL_CALLS, 0);
+        assert!(!decode_t3(&w).all_calls);
+    }
+
+    #[test]
+    fn the_network_model_limits_the_net_and_the_site_values() {
+        assert_eq!([net_max(0), net_max(1), net_max(2), net_max(3)], [511, 127, 15, 3]);
+        assert_eq!([site_max(0), site_max(1), site_max(2), site_max(3)], [7, 31, 255, 1023]);
+    }
+
+    #[test]
+    fn a_power_save_value_out_of_range_reads_as_off_and_sites_stop_at_eight() {
+        let mut v = vec![0u8; T3_BLOCK];
+        v[21] = 9;
+        v[22] = 20;
+        assert_eq!(decode_t3(&v).power_save, 0);
+        assert_eq!(decode_t3(&v).sites.len(), T3_SITES);
+    }
+
+    #[test]
+    fn the_key_has_no_psn_in_16_octets_and_a_psn_in_19() {
+        let key = parse_key_hex("00 11 22 33:44-55 66 77 88 99 AA BB CC DD EE FF").unwrap();
+        assert_eq!(key_hex(&key), "00112233445566778899AABBCCDDEEFF");
+        let none = encode_t3_key(&T3Key { key, psn: 0 }, None);
+        assert_eq!(none.len(), 16);
+        let with = encode_t3_key(&T3Key { key, psn: 0x010203 }, None);
+        assert_eq!((with.len(), &with[16..]), (19, &[1u8, 2, 3][..]));
+        assert_eq!(decode_t3_key(&with), Some(T3Key { key, psn: 0x010203 }));
+        assert_eq!(decode_t3_key(&none).unwrap().psn, 0);
+        // Octets after the PSN of a longer stored secret are kept when the PSN stays.
+        let mut longer = with.clone();
+        longer.extend_from_slice(&[9, 9]);
+        assert_eq!(&encode_t3_key(&T3Key { key, psn: 0x040506 }, Some(&longer))[19..], &[9, 9]);
+        // Shorter than 16 octets is no key; bad hex is none.
+        assert_eq!(decode_t3_key(&[0; 15]), None);
+        assert_eq!(parse_key_hex("00112233"), None);
+        assert_eq!(parse_key_hex(&"G".repeat(32)), None);
+    }
+
+    #[test]
+    fn a_key_never_prints() {
+        let k = T3Key { key: [0xAB; 16], psn: 7 };
+        let text = format!("{k:?}");
+        assert!(!text.to_uppercase().contains("AB"), "{text}");
+    }
+
+    #[test]
+    fn a_tier_iii_channel_entry_round_trips_and_a_missing_color_code_is_the_systems() {
+        let e = |cc| SysEntry {
+            cls: 0,
+            group: 0xFF,
+            control: true,
+            flags: 0,
+            body: EntryBody::T3Channel { lcn: 12, rx_hz: 438_100_000, tx_hz: 443_100_000, cc },
+            raw: Vec::new(),
+        };
+        for cc in [None, Some(5)] {
+            let rec = encode_entry(SYSTEM_T3, 0, &e(cc));
+            let (_, cls, group, flags, body) = decode_entry_record(&rec).unwrap();
+            assert_eq!(decode_entry(SYSTEM_T3, cls, group, flags, body, &rec).fields(), e(cc));
+        }
+        // A 10-octet body (no color code octet) reads as the system's.
+        let mut rec = encode_entry(SYSTEM_T3, 0, &e(None));
+        rec.truncate(ENTRY_HDR + 10);
+        let (_, cls, group, flags, body) = decode_entry_record(&rec).unwrap();
+        assert!(matches!(decode_entry(SYSTEM_T3, cls, group, flags, body, &rec).body, EntryBody::T3Channel { cc: None, .. }));
+    }
+
+    #[test]
+    fn a_new_tier_iii_system_transmits_and_a_new_p25_trunked_one_listens() {
+        assert!(System::new(SYSTEM_T3, "T").tx);
+        assert!(!System::new(SYSTEM_P25_TRUNK, "P").tx);
     }
 }

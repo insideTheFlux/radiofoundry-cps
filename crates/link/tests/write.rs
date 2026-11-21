@@ -397,3 +397,50 @@ fn a_system_and_a_channel_on_it_write_and_read_back() {
     let area = rfcps_core::kv::decode_area(fake(&mut radio).image());
     assert!(area.entries.iter().all(|e| !(0x0100..0x0400).contains(&e.key) || (0x0400..0x0800).contains(&e.key)), "{:?}", area.entries);
 }
+
+#[test]
+fn a_tier_iii_system_with_a_key_writes_and_a_delete_takes_its_secret_and_records() {
+    use rfcps_core::kv;
+    use rfcps_core::systems::{self, EntryBody, SysEntry, System, SystemFields, T3Key, T3System};
+    let (mut radio, base, mut cp) = setup();
+    let mut s = System::new(systems::SYSTEM_T3, "T3 Net");
+    s.number = 1;
+    s.fields = SystemFields::T3(T3System { model: 1, net: 5, ..T3System::default() });
+    s.needs_key = true;
+    s.secret = Some(systems::encode_t3_key(&T3Key { key: [7; 16], psn: 0 }, None));
+    s.entries.push(SysEntry {
+        cls: 0,
+        group: 0xFF,
+        control: true,
+        flags: 0,
+        body: EntryBody::T3Channel { lcn: 1, rx_hz: 438_100_000, tx_hz: 443_100_000, cc: None },
+        raw: Vec::new(),
+    });
+    cp.systems.push(s);
+    let systems = cp.systems.clone();
+    modes::set_kind(&mut cp.channels[2], modes::KIND_T3, Mode::Dmr, &systems);
+    let edited = cp.encode(&base);
+    radio.write_image(&base, &edited, &mut |_, _| {}).unwrap();
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert_eq!(now.systems.len(), 1);
+    assert!(now.systems[0].needs_key && now.systems[0].secret.is_some());
+    assert_eq!(now.channel(3).unwrap().kind(), modes::KIND_T3);
+    assert!(radio.verify(&edited).unwrap().is_empty());
+
+    // The system's own records, put in as another tool would have, go with it when the system is deleted.
+    let mut bytes = fake(&mut radio).image().to_vec();
+    let entries = kv::entries_for_write(&bytes).unwrap();
+    let with = kv::set_value(&kv::set_value(&entries, systems::T3_POLL_KEY, &[1]), systems::T3_SUPL_KEY, &[2]);
+    assert!(kv::put_entries(&mut bytes, &entries, &with));
+    for (i, &v) in bytes.iter().enumerate().skip(kv::KV_ADDR).take(kv::KV_SIZE) {
+        fake(&mut radio).poke(i, v);
+    }
+    let read = radio.read_image(&mut |_, _| {}).unwrap();
+    let mut cp = Codeplug::decode(&read);
+    cp.remove_system(1);
+    let gone = cp.encode(&read);
+    radio.write_image(&read, &gone, &mut |_, _| {}).unwrap();
+    let area = kv::decode_area(fake(&mut radio).image());
+    let keys: Vec<u16> = area.entries.iter().map(|e| e.key).collect();
+    assert!(keys.iter().all(|k| !(0x0100..0x0400).contains(k) && *k != 0x0800 && *k != 0x0900 || (0x0400..0x0800).contains(k)), "{keys:?}");
+}
