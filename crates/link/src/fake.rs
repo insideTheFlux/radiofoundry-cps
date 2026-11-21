@@ -36,6 +36,9 @@ pub struct FakeRadio {
     pub requests: usize,
     /// Offer staged writes (a staging area of this many blocks); 0 for none, as on a DM-32UV.
     pub stage_max: u16,
+    /// Report this INFO layout instead (protocol version, EEPROM image size, flash image start, image end), to test an
+    /// editor against a radio whose layout differs.
+    pub info_layout: Option<(u8, u32, u32, u32)>,
     /// Refuse the next END with this reason, once (the host should send the block again).
     pub refuse_next_end: Option<u8>,
     /// The blocks written so far, in order.
@@ -53,6 +56,7 @@ impl FakeRadio {
             corrupt_next_read: false,
             requests: 0,
             stage_max: 0,
+            info_layout: None,
             refuse_next_end: None,
             written_blocks: Vec::new(),
         }
@@ -88,11 +92,14 @@ impl FakeRadio {
                 self.reply(cmd, seq, r);
             }
             (0x1C, Some(0)) => {
-                let mut r = vec![0, 1, 2 | u8::from(self.stage_max > 0)];
+                let (ver, ee, fl, end) =
+                    self.info_layout
+                        .unwrap_or((1, 0x10000, 0x20000, self.image.len() as u32));
+                let mut r = vec![0, ver, 2 | u8::from(self.stage_max > 0)];
                 r.extend_from_slice(&(BLOCK as u16).to_le_bytes());
                 r.extend_from_slice(&[16, 61]);
                 r.extend_from_slice(&1000u16.to_le_bytes());
-                for v in [0x10000u32, 0x20000, self.image.len() as u32, 0x700000] {
+                for v in [ee, fl, end, 0x700000] {
                     r.extend_from_slice(&v.to_le_bytes());
                 }
                 r.extend_from_slice(&self.stage_max.to_le_bytes());

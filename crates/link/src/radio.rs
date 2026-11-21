@@ -23,6 +23,9 @@ pub enum LinkError {
     RadioChanged(usize),
     /// A write finished but reading the radio back gave something else.
     VerifyFailed(usize),
+    /// The radio's image layout is not the one this editor reads and writes (its INFO reply says so), so nothing was
+    /// read or written.
+    Layout(String),
     /// The codeplug's settings area and the radio's keys don't fit together (the area is full).
     Settings(&'static str),
 }
@@ -31,6 +34,7 @@ impl std::fmt::Display for LinkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LinkError::Io(e) => write!(f, "serial port: {e}"),
+            LinkError::Layout(m) => write!(f, "this radio's codeplug layout is not supported: {m}"),
             LinkError::Settings(e) => write!(f, "the codeplug's settings area: {e}"),
             LinkError::Timeout => write!(f, "the radio did not answer"),
             LinkError::Status {

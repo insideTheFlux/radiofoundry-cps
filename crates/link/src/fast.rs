@@ -2,10 +2,10 @@
 // Copyright (c) 2026 insideTheFlux
 
 //! The fast codeplug protocol (RadioFoundry `docs/spec/cps-fast.md`): the debug link's CODEPLUG command, 4 KB blocks,
-//! CRC-32 sums, LZ4 streams. Reading only for now.
+//! CRC-32 sums, LZ4 streams. Reading and writing; INFO is checked against the editor's layout first.
 
 use crate::radio::{LinkError, Radio, Result};
-use rfcps_core::image::{editor_blocks, Image, BLOCK, CODEPLUG_SPAN};
+use rfcps_core::image::{editor_blocks, Image, BLOCK, CODEPLUG_SPAN, FL};
 use std::io::{Read, Write};
 
 const CMD_CODEPLUG: u8 = 0x1C;
@@ -14,6 +14,9 @@ const OP_SUMS: u8 = 1;
 const OP_READ: u8 = 2;
 const FORMAT_LZ4: u8 = 1;
 const FORMAT_BLANK: u8 = 2;
+
+/// The EEPROM image's size (cps-fast.md 3.1); the gap up to `FL` is never served.
+const EEPROM_IMAGE: u32 = 0x10000;
 
 /// The CRC-32 of a block of 0xFF.
 pub const BLANK_CRC: u32 = 0xF154_670A;
@@ -32,6 +35,47 @@ pub struct Info {
     pub image_end: u32,
     pub eeprom_base: u32,
     pub stage_max: u16,
+}
+
+impl Info {
+    /// Does the radio's image have the layout this editor assumes (the EEPROM image at 0, the flash image at `FL`, both
+    /// inside the radio's image, 4 KB blocks, protocol version 1)? An editor that read or wrote a radio with another
+    /// layout would take the wrong blocks, so every read and write checks this first.
+    pub fn check_layout(&self) -> Result<()> {
+        let end = editor_blocks().into_iter().max().map_or(0, |a| a + BLOCK) as u32;
+        let bad = |what: String| Err(LinkError::Layout(what));
+        if self.version != 1 {
+            return bad(format!(
+                "fast protocol version {} (this editor speaks 1)",
+                self.version
+            ));
+        }
+        if usize::from(self.block) != BLOCK {
+            return bad(format!(
+                "blocks of {} bytes (this editor uses {BLOCK})",
+                self.block
+            ));
+        }
+        if self.flash_start != FL as u32 {
+            return bad(format!(
+                "the flash image starts at {:#x} (this editor expects {:#x})",
+                self.flash_start, FL
+            ));
+        }
+        if self.eeprom_size != EEPROM_IMAGE {
+            return bad(format!(
+                "an EEPROM image of {:#x} bytes (this editor expects {:#x})",
+                self.eeprom_size, EEPROM_IMAGE
+            ));
+        }
+        if self.image_end < end {
+            return bad(format!(
+                "the image ends at {:#x}, before {end:#x} where the editor's codeplug ends",
+                self.image_end
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +128,13 @@ impl<P: Read + Write> Radio<P> {
             eeprom_base: rd32(&d, 20),
             stage_max: rd16(&d, 24),
         })
+    }
+
+    /// `codeplug_info`, refused unless the radio's image layout is the one this editor knows.
+    pub fn checked_info(&mut self) -> Result<Info> {
+        let info = self.codeplug_info()?;
+        info.check_layout()?;
+        Ok(info)
     }
 
     /// The CRC-32 of up to 16 consecutive blocks from `addr`, and which of them are blank.
@@ -170,6 +221,7 @@ impl<P: Read + Write> Radio<P> {
 
     /// Reads what the editor needs into an image (blank blocks as 0xFF). `progress(done, total)` is called per block.
     pub fn read_image(&mut self, progress: &mut dyn FnMut(usize, usize)) -> Result<Image> {
+        self.checked_info()?;
         let blocks = editor_blocks();
         let mut img = Image::from_bytes(&[]);
         debug_assert_eq!(img.len(), CODEPLUG_SPAN);

@@ -65,7 +65,7 @@ fn same_but_vfo(a: &[u8], b: &[u8], base: usize) -> bool {
 impl<P: Read + Write> Radio<P> {
     /// CRC-32 and blank flag of each block, asking for runs of consecutive blocks together.
     fn sums_of(&mut self, addrs: &[usize]) -> Result<HashMap<usize, (u32, bool)>> {
-        let per = usize::from(self.codeplug_info()?.sums_per_request.max(1));
+        let per = usize::from(self.checked_info()?.sums_per_request.max(1));
         let mut out = HashMap::new();
         let mut i = 0;
         while i < addrs.len() {
@@ -159,7 +159,8 @@ impl<P: Read + Write> Radio<P> {
         let (_, blank) = self.sums_of(&[AREA_BLOCK])?[&AREA_BLOCK];
         let radio = self.block_bytes(AREA_BLOCK, blank)?;
         let mut out = image.clone();
-        kv::area_for_write(out.bytes_mut(), &radio, base.view(AREA_BLOCK, BLOCK)).map_err(LinkError::Settings)?;
+        kv::area_for_write(out.bytes_mut(), &radio, base.view(AREA_BLOCK, BLOCK))
+            .map_err(LinkError::Settings)?;
         Ok(out)
     }
 
@@ -172,11 +173,11 @@ impl<P: Read + Write> Radio<P> {
         image: &Image,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<WriteReport> {
+        let info = self.checked_info()?;
         let changed = self.verify_with(base, false)?;
         if !changed.is_empty() {
             return Err(LinkError::RadioChanged(changed.len()));
         }
-        let info = self.codeplug_info()?;
         let image = &self.image_for_write(base, image)?;
         let jobs = self.plan_write(image)?;
         if jobs.is_empty() {
