@@ -71,23 +71,5 @@ What they check: the same records and fields; the image decoded and encoded agai
 and the edits (rename, tone, squelch, power, a new channel, a new contact, a renamed zone, radio name, boot text) give
 the same image as the web editor's encoder.
 
-### Random edits (differential test)
-
-`tools/differential/gen.mjs` applies random edits to an image through the web editor's own model and writes, per case,
-the image the web editor encodes, a canonical dump of what it decodes, its CSV, qdmr and CHIRP exports and its problems.
-For pairs of cases it also writes the first one's model onto the second one's bytes. `crates/core/tests/differential.rs`
-makes the CPS do the same and compares everything. It runs only when `RFCPS_FUZZ_DIR` is set.
-
-```
-export RFOUNDRY_DIR=~/rfoundry        # the RadioFoundry checkout (default)
-node tools/differential/prep.mjs radio.bin base.bin                  # optional: add lists, DTMF, APRS, systems, tags
-node tools/differential/gen.mjs base.bin /tmp/fuzz 200 1             # image, output dir, cases, seed
-RFCPS_FUZZ_DIR=/tmp/fuzz cargo test -p rfcps-core --test differential -- --nocapture
-```
-
-It reports every mismatch with the edits that led to it. The CPS-only weather-channel warning is left out of the
-problem comparison. To check the test itself, plant a bug in the core, run it and expect mismatches. Use several seeds
-and a prepared base, since a plain image has no systems or tags.
-
 A real image holds a callsign, a DMR ID and channel names. Keep these files out of the repository and never write an
 edited test image to a radio.
