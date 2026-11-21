@@ -10,6 +10,7 @@ use eframe::egui::{self, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
 use rfcps_core::fields::parse_tone;
 use rfcps_core::freqs::{listen_band, set_rx, set_tx, ListenBand};
+use rfcps_core::modes::{self, Params};
 use rfcps_core::records::{Channel, Mode, MAX_CHANNELS};
 use rfcps_core::Codeplug;
 
@@ -216,20 +217,37 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
         });
 }
 
-/// The mode as the radio shows it: an FM channel in the air band is received in AM (the web editor says the same).
+/// The mode as the radio shows it: an FM channel in the air band is received in AM (the web editor says the same). A
+/// channel of a kind (P25, NXDN, ...) shows the kind; choosing a mode makes the channel that mode.
 fn mode_combo(ui: &mut Ui, c: &mut Channel, salt: (&str, u16)) -> egui::Response {
-    let band = if c.mode == Mode::Fm { listen_band(c.rx_hz) } else { None };
-    let shown = match (c.mode, band) {
-        (Mode::Dmr, _) => "DMR",
-        (_, Some(ListenBand::Air)) => "AM",
-        _ => "FM",
+    let band = if c.mode == Mode::Fm && c.tagged.is_none() {
+        listen_band(c.rx_hz)
+    } else {
+        None
+    };
+    let kind = c.kind();
+    let shown = match (kind, c.mode, band) {
+        (0, Mode::Dmr, _) => "DMR".to_string(),
+        (0, _, Some(ListenBand::Air)) => "AM".to_string(),
+        (0, _, _) => "FM".to_string(),
+        (k, _, _) if modes::kind_name(k) != "?" => modes::kind_name(k).to_string(),
+        (k, _, _) => format!("Mode {k}"),
     };
     let r = egui::ComboBox::from_id_salt(salt)
         .selected_text(shown)
         .width(58.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut c.mode, Mode::Fm, "FM");
-            ui.selectable_value(&mut c.mode, Mode::Dmr, "DMR");
+            if ui.selectable_label(kind == 0 && c.mode == Mode::Fm, "FM").clicked() {
+                modes::set_kind(c, 0, Mode::Fm);
+            }
+            if ui.selectable_label(kind == 0 && c.mode == Mode::Dmr, "DMR").clicked() {
+                modes::set_kind(c, 0, Mode::Dmr);
+            }
+            for k in modes::EDITABLE_KINDS {
+                if ui.selectable_label(kind == k, modes::kind_name(k)).clicked() {
+                    modes::set_kind(c, k, Mode::Dmr);
+                }
+            }
         })
         .response;
     match band {
@@ -321,8 +339,8 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             ui.label("Name");
             name_edit(ui, &mut c.name, 16, 200.0);
             ui.end_row();
-            ui.label("Mode");
-            mode_combo(ui, c, ("dmode", number));
+            let l = ui.label("Mode");
+            mode_combo(ui, c, ("dmode", number)).labelled_by(l.id);
             ui.end_row();
             ui.label("Power");
             power_combo(ui, c, ("dpower", number));
@@ -402,13 +420,21 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 ui.label(RichText::new("Radio Default").color(p.muted));
             }
             ui.end_row();
-            ui.label("RX Only");
-            let mut rx_only = c.rx_only || listen.is_some();
-            if ui
-                .add_enabled(listen.is_none(), egui::Checkbox::new(&mut rx_only, ""))
-                .changed()
-            {
-                c.rx_only = rx_only;
+            let l = ui.label("RX Only");
+            if let Some(t) = &mut c.tagged {
+                // A channel of a kind keeps its record receive only; whether it transmits is the tag's flag.
+                let mut rx_only = !t.tx;
+                if ui.checkbox(&mut rx_only, "").labelled_by(l.id).changed() {
+                    t.tx = !rx_only;
+                }
+            } else {
+                let mut rx_only = c.rx_only || listen.is_some();
+                if ui
+                    .add_enabled(listen.is_none(), egui::Checkbox::new(&mut rx_only, ""))
+                    .changed()
+                {
+                    c.rx_only = rx_only;
+                }
             }
             ui.end_row();
             ui.label("Zone Scan Skip");
@@ -419,7 +445,9 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             ui.end_row();
         });
 
-    if c.mode == Mode::Fm {
+    if c.tagged.is_some() {
+        mode_group(ui, c, choices);
+    } else if c.mode == Mode::Fm {
         group(ui, "FM");
         egui::Grid::new(("fm", number))
             .num_columns(2)
@@ -550,4 +578,147 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 ui.end_row();
             });
     }
+}
+
+/// A hex field of up to three digits (a NAC); the value is applied only when the text is one.
+fn hex_field(ui: &mut Ui, id: egui::Id, value: &mut u16, max: u16) -> egui::Response {
+    let (r, v) = checked_text(ui, id, format!("{:03X}", *value), 70.0, |s| {
+        u16::from_str_radix(s.trim(), 16).ok().filter(|v| *v <= max)
+    });
+    if let Some(v) = v {
+        *value = v;
+    }
+    r
+}
+
+/// A number field in `0..=max`.
+fn num_field(ui: &mut Ui, id: egui::Id, value: &mut u8, max: u8, width: f32) -> egui::Response {
+    let (r, v) = checked_text(ui, id, value.to_string(), width, |s| {
+        s.trim().parse::<u8>().ok().filter(|v| *v <= max)
+    });
+    if let Some(v) = v {
+        *value = v;
+    }
+    r
+}
+
+/// The channel's unit ID: its own, or empty for the radio-wide one.
+fn unit_field(ui: &mut Ui, c: &mut Channel, number: u16) -> egui::Response {
+    let id = egui::Id::unique(("d_unit", number));
+    let shown = if c.dmr_id == 0 { String::new() } else { c.dmr_id.to_string() };
+    let (r, v) = checked_text(ui, id, shown, 120.0, |s| {
+        let t = s.trim();
+        if t.is_empty() {
+            Some(0u32)
+        } else {
+            t.parse::<u32>().ok().filter(|v| *v <= 16_777_215)
+        }
+    });
+    if let Some(v) = v {
+        c.dmr_id = v;
+    }
+    r
+}
+
+/// The section of a channel of a kind: P25 and NXDN conventional (p25-codeplug.md 2, nxdn-codeplug.md 2); any other
+/// kind is kept as it is.
+fn mode_group(ui: &mut Ui, c: &mut Channel, choices: &Choices) {
+    let number = c.number;
+    let muted = theme::palette(ui).muted;
+    let Some(kind) = c.tagged.as_ref().map(|t| t.kind) else { return };
+    let params = c.tagged.as_ref().map(|t| t.params.clone());
+    match params {
+        Some(Params::P25(mut p)) => {
+            group(ui, "P25");
+            egui::Grid::new(("p25", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+                let l = ui.label("Squelch");
+                squelch_combo(ui, ("p25sq", number), &mut p.squelch, "Normal (every call of the NAC)").labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("RX NAC");
+                hex_field(ui, egui::Id::unique(("p25_rx", number)), &mut p.rx_nac, 0xFFF).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("TX NAC");
+                hex_field(ui, egui::Id::unique(("p25_tx", number)), &mut p.tx_nac, 0xFFF).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("TX Contact (talk group)");
+                contact_combo(ui, c, &choices.contacts, ("p25contact", number)).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("Channel Unit ID");
+                unit_field(ui, c, number).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("Talkaround");
+                ui.checkbox(&mut c.dmo, "").labelled_by(l.id);
+                ui.end_row();
+            });
+            ui.label(
+                RichText::new("A NAC is three hex digits (293 is the default, F7E any NAC). The TX NAC follows the RX NAC when it is the same. An empty unit ID uses the radio's.")
+                    .size(13.0)
+                    .color(muted),
+            );
+            if let Some(t) = &mut c.tagged {
+                t.params = Params::P25(p);
+            }
+        }
+        Some(Params::Nxdn(mut p)) => {
+            group(ui, "NXDN");
+            egui::Grid::new(("nxdn", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+                let l = ui.label("Rate");
+                egui::ComboBox::from_id_salt(("nxdnrate", number))
+                    .selected_text(if p.rate9600 { "9600 bit/s" } else { "4800 bit/s" })
+                    .width(120.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut p.rate9600, true, "9600 bit/s");
+                        ui.selectable_value(&mut p.rate9600, false, "4800 bit/s");
+                    })
+                    .response
+                    .labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("Squelch");
+                squelch_combo(ui, ("nxdnsq", number), &mut p.squelch, "RAN (every call of the RAN)").labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("RX RAN");
+                num_field(ui, egui::Id::unique(("nxdn_rx", number)), &mut p.rx_ran, modes::RAN_MAX, 70.0).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("TX RAN");
+                num_field(ui, egui::Id::unique(("nxdn_tx", number)), &mut p.tx_ran, modes::RAN_MAX, 70.0).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("TX Contact (group)");
+                contact_combo(ui, c, &choices.contacts, ("nxdncontact", number)).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("Channel Unit ID");
+                unit_field(ui, c, number).labelled_by(l.id);
+                ui.end_row();
+            });
+            ui.label(
+                RichText::new("A RAN is 0 to 63; 0 receives every RAN. The TX RAN follows the RX RAN (RAN 1 when that is 0) when it is the same. An empty unit ID uses the radio's.")
+                    .size(13.0)
+                    .color(muted),
+            );
+            if let Some(t) = &mut c.tagged {
+                t.params = Params::Nxdn(p);
+            }
+        }
+        _ => {
+            group(ui, modes::kind_name(kind));
+            ui.label(
+                RichText::new(format!(
+                    "This channel is of a mode ({}) this editor does not edit. It is kept as it is.",
+                    if modes::kind_name(kind) == "?" { format!("kind {kind}") } else { modes::kind_name(kind).to_string() }
+                ))
+                .color(muted),
+            );
+        }
+    }
+}
+
+/// Squelch: 0 plays every call of the NAC or RAN, 1 plays only the calls for this radio (selective).
+fn squelch_combo(ui: &mut Ui, salt: (&str, u16), value: &mut u8, open: &str) -> egui::Response {
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(if *value == 1 { "Selective" } else { open })
+        .width(240.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, 0, open);
+            ui.selectable_value(value, 1, "Selective (this radio's calls)");
+        })
+        .response
 }

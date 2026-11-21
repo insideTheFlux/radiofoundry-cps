@@ -8,7 +8,7 @@ Private project for now. Anything ported from RadioFoundry keeps its MIT notice 
 ## What it does
 
 - Reads a radio's codeplug over its programming cable or USB (the fast codeplug protocol), in under a second.
-- Edits channels, zones, contacts, RX group lists and the general settings (including the settings area: ARS server, IP gateway, tones and signaling tones), with undo, a Problems list (the web editor's
+- Edits channels, zones, contacts, RX group lists and the general settings (including the settings area: ARS server, IP gateway, tones and signaling tones), P25 and NXDN conventional channels (mode, NAC or RAN, squelch, rate) and the P25 and NXDN unit IDs, with undo, a Problems list (the web editor's
   checks) and the web editor's look, light or dark.
 - Writes to the radio safely: a list of what will change, a backup of the radio's codeplug first, only the changed
   blocks, a refusal if the radio changed since it was read, and a read-back check.

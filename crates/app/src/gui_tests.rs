@@ -336,3 +336,139 @@ fn a_newer_settings_area_is_flagged() {
 }
 
 
+
+// --- Channel modes: P25 and NXDN on the Channels tab, and the unit IDs ---
+
+use rfcps_core::modes::{self, Fallback, NxdnConv, P25Conv, Params, Tagged};
+use rfcps_core::records::Channel;
+use rfcps_core::{Codeplug, Image};
+
+/// An app with a plain FM channel 1 open and selected. The channel table's own cells have no accessible names yet
+/// (see the real-image test), so the accessibility check is off for these.
+fn harness_with_channel(tweak: impl FnOnce(&mut Codeplug)) -> H {
+    let base = Image::blank();
+    let mut cp = Codeplug::decode(&base);
+    let mut c = Channel::new(1, 146_520_000, 146_520_000);
+    c.name = "Simplex".into();
+    cp.channels.push(c);
+    tweak(&mut cp);
+    let img = cp.encode(&base);
+    let mut app = App::with_ports(Vec::new());
+    app.open_image(img.bytes(), "modes.bin".into());
+    app.channel = Some(1);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1240.0, 1400.0))
+        .with_accessibility_check(false)
+        .build_eframe(move |cc| {
+            theme::apply(&cc.egui_ctx);
+            app
+        });
+    h.run();
+    h
+}
+
+fn channel(h: &H) -> &Channel {
+    &h.state().doc.as_ref().unwrap().cp.channels[0]
+}
+
+/// Replaces a text field's text: select all, then type.
+fn retype(h: &mut H, label: &str, text: &str) {
+    h.get_by_role_and_label(Role::TextInput, label).focus();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run();
+    h.get_by_role_and_label(Role::TextInput, label).type_text(text);
+    h.run();
+}
+
+#[test]
+fn a_channel_is_made_p25_and_its_fields_are_edited() {
+    let mut h = harness_with_channel(|_| {});
+    assert_eq!(channel(&h).kind(), 0);
+    pick(&mut h, "Mode", "P25");
+    let c = channel(&h);
+    assert_eq!(c.kind(), modes::KIND_P25);
+    // The record is the safe stand-in: DMR, receive only. Transmit allowed is the tag's.
+    assert!(c.rx_only && c.mode == rfcps_core::records::Mode::Dmr);
+    assert!(c.tagged.as_ref().unwrap().tx);
+    h.get_by_role_and_label(Role::TextInput, "RX NAC");
+    h.get_by_role_and_label(Role::TextInput, "TX NAC");
+
+    retype(&mut h, "RX NAC", "123");
+    retype(&mut h, "TX NAC", "456");
+    pick(&mut h, "Squelch", "Selective (this radio's calls)");
+    let t = channel(&h).tagged.as_ref().unwrap();
+    assert_eq!(t.params, Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x456 }));
+    // A value that isn't a NAC is not applied.
+    retype(&mut h, "RX NAC", "ZZZ");
+    assert_eq!(channel(&h).tagged.as_ref().unwrap().params, Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x456 }));
+}
+
+#[test]
+fn a_channel_is_made_nxdn_and_its_fields_are_edited() {
+    let mut h = harness_with_channel(|_| {});
+    pick(&mut h, "Mode", "NXDN");
+    assert_eq!(channel(&h).kind(), modes::KIND_NXDN);
+    pick(&mut h, "Rate", "4800 bit/s");
+    retype(&mut h, "RX RAN", "5");
+    retype(&mut h, "TX RAN", "9");
+    retype(&mut h, "RX RAN", "70"); // above 63: not applied
+    let t = channel(&h).tagged.as_ref().unwrap();
+    assert_eq!(t.params, Params::Nxdn(NxdnConv { rate9600: false, squelch: 0, rx_ran: 5, tx_ran: 9 }));
+}
+
+#[test]
+fn rx_only_on_a_channel_of_a_kind_is_the_tags_transmit_flag() {
+    let mut h = harness_with_channel(|cp| modes::set_kind(&mut cp.channels[0], modes::KIND_P25, rfcps_core::records::Mode::Dmr));
+    assert!(channel(&h).tagged.as_ref().unwrap().tx);
+    // "RX Only" is the first checkbox of the form that is labelled so.
+    h.get_by_role_and_label(Role::CheckBox, "RX Only").click();
+    h.run();
+    let c = channel(&h);
+    assert!(!c.tagged.as_ref().unwrap().tx);
+    assert!(c.rx_only, "the record stays receive only");
+}
+
+#[test]
+fn going_back_to_fm_removes_the_kind() {
+    let mut h = harness_with_channel(|cp| modes::set_kind(&mut cp.channels[0], modes::KIND_NXDN, rfcps_core::records::Mode::Dmr));
+    assert_eq!(channel(&h).kind(), modes::KIND_NXDN);
+    pick(&mut h, "Mode", "FM");
+    let c = channel(&h);
+    assert_eq!((c.kind(), c.mode), (0, rfcps_core::records::Mode::Fm));
+    assert!(!c.rx_only, "transmit allowed returns as the record's receive-only bit");
+    h.get_by_label("FM");
+}
+
+#[test]
+fn a_channel_of_a_mode_this_editor_does_not_edit_is_shown_and_kept() {
+    let h = harness_with_channel(|cp| {
+        cp.channels[0].tagged = Some(Tagged {
+            kind: modes::KIND_P25_TRUNK,
+            system: 2,
+            tx: false,
+            base_own: false,
+            fallback: Fallback::None,
+            params: Params::Unknown,
+            raw: Vec::new(),
+        });
+    });
+    assert_eq!(channel(&h).kind(), modes::KIND_P25_TRUNK);
+    h.get_by_label_contains("this editor does not edit");
+    // Nothing about it changed: encoding the open codeplug again leaves the image as it is.
+    let doc = h.state().doc.as_ref().unwrap();
+    let again = doc.cp.encode(&doc.base);
+    assert_eq!(again.bytes(), doc.base.bytes());
+}
+
+#[test]
+fn the_unit_ids_are_set_on_the_general_tab() {
+    let mut h = harness_on_general();
+    h.get_by_role_and_label(Role::TextInput, "P25 unit ID");
+    type_into(&mut h, "P25 unit ID", "3100001");
+    type_into(&mut h, "NXDN unit ID", "70000"); // above 65519: not applied
+    let ms = &h.state().doc.as_ref().unwrap().cp.mode_settings;
+    assert_eq!((ms.p25_unit_id, ms.nxdn_unit_id), (3_100_001, 0));
+    retype(&mut h, "NXDN unit ID", "4242");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.mode_settings.nxdn_unit_id, 4242);
+}

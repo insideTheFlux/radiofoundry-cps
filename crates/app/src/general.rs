@@ -102,6 +102,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, area_newer: bool) {
             .color(muted),
     );
     keyed(ui, &mut g.keys, area_newer);
+    unit_ids(ui, &mut cp.mode_settings);
 }
 
 const OUTPUTS: [&str; 5] = [
@@ -263,3 +264,43 @@ fn sig_event(ui: &mut Ui, event: usize, title: &str, rec: &mut Option<SigRecord>
     });
 }
 
+
+/// A unit ID field for a mode: empty is 0, which uses the radio's DMR ID; otherwise `1..=max`.
+fn unit_field(ui: &mut Ui, label: &str, salt: &str, value: &mut u32, max: u32) {
+    let l = ui.label(label);
+    let id = egui::Id::unique(("general_unit", salt));
+    let shown = if *value == 0 { String::new() } else { value.to_string() };
+    let (r, v) = checked_text(ui, id, shown, 140.0, |s| {
+        let t = s.trim();
+        if t.is_empty() {
+            Some(0u32)
+        } else {
+            t.parse::<u32>().ok().filter(|v| (1..=max).contains(v))
+        }
+    });
+    r.labelled_by(l.id);
+    if let Some(v) = v {
+        *value = v;
+    }
+    ui.end_row();
+}
+
+/// The unit IDs of the P25 and NXDN modes (codeplug-settings.md, p25-codeplug.md 1, nxdn-codeplug.md 1).
+fn unit_ids(ui: &mut Ui, s: &mut rfcps_core::modes::ModeSettings) {
+    let muted = theme::palette(ui).muted;
+    group(ui, "Unit IDs");
+    let mut nxdn = u32::from(s.nxdn_unit_id);
+    egui::Grid::new("general_units")
+        .num_columns(2)
+        .spacing([16.0, 9.0])
+        .show(ui, |ui| {
+            unit_field(ui, "P25 unit ID", "p25", &mut s.p25_unit_id, rfcps_core::modes::P25_UNIT_MAX);
+            unit_field(ui, "NXDN unit ID", "nxdn", &mut nxdn, rfcps_core::modes::NXDN_UNIT_MAX);
+        });
+    s.nxdn_unit_id = nxdn as u16;
+    ui.label(
+        RichText::new("The radio's identity in that mode. Empty uses the radio's DMR ID (NXDN: 1 when that is above 65519).")
+            .size(13.0)
+            .color(muted),
+    );
+}

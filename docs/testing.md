@@ -25,6 +25,12 @@ picking a tone, switching a signaling tone on, and the warning for an area of a 
 radio's own menu changed since the read is kept, a file without an area never erases the radio's keys, and an area of a
 newer version is never overwritten.
 
+Channel modes (P25 and NXDN conventional) are covered the same way: the GUI tests switch a channel's mode, edit its NAC,
+RAN, rate and squelch, flip RX Only (the tag's transmit flag), go back to FM, set the unit IDs and show a channel of a
+mode this editor doesn't edit; the link tests write a tagged channel (its record, then its tag), follow a rename, drop the
+tag with its channel and keep the radio's tags when a file without an area is written; the golden test compares whole
+images with the web editor's.
+
 Not covered: native file dialogs, the serial write itself (the software-radio tests in `rfcps-link` and the hand test
 on a radio cover it), and pixel snapshots (`egui_kittest`'s `snapshot` feature, not enabled).
 
@@ -39,6 +45,7 @@ radio image. They run only when these variables are set, and otherwise pass with
 | `RFCPS_GOLDEN` | the web editor's decode of it, as JSON (`golden.mjs`, a small Node script over `model.js decode()`) |
 | `RFCPS_EDITED_JS` | the web editor's encode of a fixed set of edits to the same image (`edit_js.mjs`) |
 | `RFCPS_KV_DIR` | the web editor's settings-area sectors for fixed key edits, with the radio-merge case (`edit_kv.mjs`, a small Node script over `kv.js` `putKeys` and `areaForWrite`) |
+| `RFCPS_MODES_DIR` | the web editor's whole images for fixed channel-mode edits (`edit_modes.mjs`: `setKind` to P25 and NXDN with parameters and unit IDs, a rename, a delete, back to plain; `model.js` `encode()`) |
 
 ```
 RFCPS_IMAGE=... RFCPS_GOLDEN=... RFCPS_EDITED_JS=... cargo test -p rfcps-core --test golden -- --nocapture
