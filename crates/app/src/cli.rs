@@ -7,6 +7,9 @@
 /// Runs a command-line mode when the first argument asks for one. Returns the exit code, or None to open the window.
 pub fn run(args: &[String]) -> Option<i32> {
     let first = args.first()?.as_str();
+    if first.starts_with('-') {
+        attach_console();
+    }
     match first {
         "--version" | "-V" => {
             println!("rfcps {}", env!("CARGO_PKG_VERSION"));
@@ -37,6 +40,40 @@ pub fn run(args: &[String]) -> Option<i32> {
         _ => None,
     }
 }
+
+/// The Windows release is a GUI program with no console, so a command-line mode would print nowhere. Attach to the
+/// console of the terminal that started it and point stdout and stderr there, unless they are already redirected to a
+/// file or a pipe. A double-click launch has no parent console and stays windowed.
+#[cfg(windows)]
+fn attach_console() {
+    use std::os::windows::io::IntoRawHandle;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AttachConsole(process_id: u32) -> i32;
+        fn GetStdHandle(which: u32) -> isize;
+        fn SetStdHandle(which: u32, handle: isize) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    // SAFETY: plain Win32 calls with valid arguments; the handles opened here are kept for the life of the process.
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for which in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let h = GetStdHandle(which);
+            if h == 0 || h == -1 {
+                if let Ok(f) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+                    SetStdHandle(which, f.into_raw_handle() as isize);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_console() {}
 
 const USAGE: &str = "usage: rfcps [FILE]            open the editor (optionally with a codeplug file)\n       rfcps --ports           list serial ports\n       rfcps --read PORT OUT   read the radio's codeplug into a file (read only)\n       rfcps --version";
 
