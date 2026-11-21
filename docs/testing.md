@@ -37,6 +37,10 @@ control channel's frequencies), problems tests (a full or newer settings area, a
 secret needed but missing) and a link test that writes a system and a channel on it to the software radio. DMR Tier III systems are covered the same way (a new one transmits, as in the web editor; every field, the channel
 table, and the key: set from 32 hex digits, shown only when asked, removed; a Tier III channel on a system), with problems
 tests for the network model's limits and a link test where deleting a system also takes its secret and its own records.
+DTMF contacts and APRS configurations have their own tabs and an APRS choice on a channel; the GUI tests add, edit
+and delete them, and a channel picks a configuration, which a delete clears. CSV (`dtmf-contacts.csv`, `aprs.csv`, and
+the channel table's APRS column naming the configuration) and qdmr (`positioning` APRS systems, `gnss` fixed position,
+DTMF contacts after the digital ones) both match the web editor, and a link test writes both tables to the software radio.
 Save image
 asks before it carries a secret key (a GUI test; the file dialog itself is not driven).
 
@@ -57,6 +61,7 @@ radio image. They run only when these variables are set, and otherwise pass with
 | `RFCPS_MODES_DIR` | the web editor's whole images for fixed channel-mode edits (`edit_modes.mjs`: `setKind` to P25 and NXDN with parameters and unit IDs, a rename, a delete, back to plain; `model.js` `encode()`) |
 | `RFCPS_SYS_DIR` | the web editor's whole images for fixed system edits (`edit_systems.mjs`: `newSystem` for a P25 trunked system with a site, a control channel and a plan row, a channel put on it, a rename and a second control channel, and the system deleted; `model.js` `encode()` and `remove()`) |
 | `RFCPS_T3_DIR` | the web editor's whole images for fixed Tier III edits (`edit_t3.mjs`: a system with every field set, two channels and a key with a PSN, a channel on it, the system's own `0x0800` and `0x0900` records put in, edits, and the system deleted) |
+| `RFCPS_APRS_DIR` | the web editor's whole images for DTMF contact and APRS configuration edits (`edit_aprs.mjs`: created, edited, deleted, and an APRS record in the older layout), its CSV export of an image that holds them (`csv/`), and its qdmr export and import (`qdmr/`: `qdmr_aprs_js.mjs`, with a `rich.yaml` of awkward APRS systems) |
 
 ```
 RFCPS_IMAGE=... RFCPS_GOLDEN=... RFCPS_EDITED_JS=... cargo test -p rfcps-core --test golden -- --nocapture

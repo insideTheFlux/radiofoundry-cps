@@ -40,6 +40,8 @@ fn table_name(t: Table) -> &'static str {
         Table::Contacts => "Contact",
         Table::RxLists => "RX group list",
         Table::Systems => "System",
+        Table::Dtmf => "DTMF contact",
+        Table::Aprs => "APRS configuration",
     }
 }
 

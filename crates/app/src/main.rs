@@ -10,6 +10,8 @@ mod doc;
 mod exchange;
 mod general;
 mod lists;
+mod aprs;
+mod dtmf;
 mod systems;
 mod theme;
 mod widgets;
@@ -35,6 +37,8 @@ enum Tab {
     Zones,
     Contacts,
     Lists,
+    Dtmf,
+    Aprs,
     Systems,
     General,
 }
@@ -54,6 +58,8 @@ struct App {
     list: usize,
     /// The selected system's number (the Systems tab).
     system: Option<u16>,
+    dtmf: Option<u8>,
+    aprs: Option<u8>,
     flow: writeflow::Flow,
     problems: Vec<Problem>,
     problems_key: (u64, u64),
@@ -94,6 +100,8 @@ impl App {
             contact: None,
             list: 0,
             system: None,
+            dtmf: None,
+            aprs: None,
             flow: writeflow::Flow::new(),
             problems: Vec::new(),
             problems_key: (u64::MAX, u64::MAX),
@@ -861,6 +869,14 @@ impl eframe::App for App {
                         self.tab = Tab::Systems;
                         self.system = n;
                     }
+                    Table::Dtmf => {
+                        self.tab = Tab::Dtmf;
+                        self.dtmf = n.map(|n| n as u8);
+                    }
+                    Table::Aprs => {
+                        self.tab = Tab::Aprs;
+                        self.aprs = n.map(|n| n as u8);
+                    }
                     Table::RxLists => {
                         self.tab = Tab::Lists;
                         self.list = self
@@ -902,6 +918,12 @@ impl eframe::App for App {
                 );
                 ui.selectable_value(
                     &mut self.tab,
+                    Tab::Dtmf,
+                    format!("DTMF  {}", cp.dtmf_contacts.len()),
+                );
+                ui.selectable_value(&mut self.tab, Tab::Aprs, format!("APRS  {}", cp.aprs.len()));
+                ui.selectable_value(
+                    &mut self.tab,
                     Tab::Systems,
                     format!("Systems  {}", cp.systems.len()),
                 );
@@ -914,6 +936,8 @@ impl eframe::App for App {
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
                 Tab::Contacts => contacts::show(ui, &mut doc.cp, &mut self.contact),
                 Tab::Lists => lists::show(ui, &mut doc.cp, &mut self.list),
+                Tab::Dtmf => dtmf::show(ui, &mut doc.cp, &mut self.dtmf),
+                Tab::Aprs => aprs::show(ui, &mut doc.cp, &mut self.aprs),
                 Tab::Systems => systems::show(ui, &mut doc.cp, &mut self.system),
                 Tab::General => {
                     let newer = rfcps_core::kv::decode_area(doc.base.bytes()).state
@@ -990,5 +1014,7 @@ fn problem_table(t: Table) -> &'static str {
         Table::Contacts => "Contact",
         Table::RxLists => "RX group list",
         Table::Systems => "System",
+        Table::Dtmf => "DTMF contact",
+        Table::Aprs => "APRS configuration",
     }
 }

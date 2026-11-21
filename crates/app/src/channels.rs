@@ -39,6 +39,7 @@ fn new_channel(cp: &Codeplug) -> Option<Channel> {
 struct Choices {
     contacts: Vec<(u16, String)>,
     lists: Vec<(u8, String)>,
+    aprs: Vec<(u8, String)>,
 }
 
 pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
@@ -92,6 +93,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
             .iter()
             .map(|l| (l.number, l.name.clone()))
             .collect(),
+        aprs: cp.aprs.iter().map(|a| (a.number, a.name.clone())).collect(),
     };
     // The table keeps its natural width in a panel on the left and the form fills the rest, so a wide window leaves
     // its spare room at the far right instead of a hole in the middle.
@@ -496,6 +498,9 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                         }
                     });
                 ui.end_row();
+                let l = ui.label("APRS");
+                aprs_combo(ui, c, choices, ("faprs", number)).labelled_by(l.id);
+                ui.end_row();
                 ui.label("VOX Allowed");
                 ui.checkbox(&mut c.vox, "");
                 ui.end_row();
@@ -535,6 +540,9 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 ui.end_row();
                 ui.label("TX Contact");
                 contact_combo(ui, c, &choices.contacts, ("dcontact", number));
+                ui.end_row();
+                let l = ui.label("APRS");
+                aprs_combo(ui, c, choices, ("daprs", number)).labelled_by(l.id);
                 ui.end_row();
                 ui.label("RX Group List");
                 let shown = if c.rx_list == 0 {
@@ -813,4 +821,24 @@ fn trunk_group(
         t.system = system;
         t.no_fallback = no_fallback;
     }
+}
+
+/// The APRS configuration a channel sends its position with: none, or one of the configurations.
+fn aprs_combo(ui: &mut Ui, c: &mut Channel, choices: &Choices, salt: (&str, u16)) -> egui::Response {
+    let shown = if c.aprs == 0 {
+        "none".to_string()
+    } else {
+        choices.aprs.iter().find(|(n, _)| *n == c.aprs).map_or(format!("#{} (missing)", c.aprs), |(_, n)| n.clone())
+    };
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(shown)
+        .width(160.0)
+        .truncate()
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut c.aprs, 0, "none");
+            for (n, name) in &choices.aprs {
+                ui.selectable_value(&mut c.aprs, *n, name);
+            }
+        })
+        .response
 }

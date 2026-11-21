@@ -677,3 +677,58 @@ fn a_tier_iii_channel_is_put_on_a_system_and_may_transmit_as_in_the_web_editor()
     assert!(c.rx_only);
     h.get_by_role_and_label(Role::ComboBox, "System");
 }
+
+// --- DTMF contacts and APRS configurations ---
+
+/// The harness on the tab with this exact label (its name and its count): "APRS" alone would also match the channel
+/// form's own APRS row.
+fn harness_on_tab(label: &str) -> H {
+    let mut h = harness_with_channel_sized(|_| {}, 1800.0);
+    click(&mut h, label);
+    h
+}
+
+#[test]
+fn a_dtmf_contact_is_added_edited_and_deleted() {
+    let mut h = harness_on_tab("DTMF  0");
+    click(&mut h, "Add DTMF contact");
+    let doc = |h: &H| h.state().doc.as_ref().unwrap().cp.dtmf_contacts.clone();
+    assert_eq!(doc(&h).len(), 1);
+    assert_eq!((doc(&h)[0].number, doc(&h)[0].name.as_str(), doc(&h)[0].code.as_str()), (1, "DTMF 1", "1"));
+    // The tab names its count, and the table is selected on the new row.
+    h.get_by_label_contains("1 of 63 DTMF contacts");
+    click(&mut h, "Delete DTMF contact");
+    assert!(doc(&h).is_empty());
+}
+
+#[test]
+fn an_aprs_configuration_is_added_edited_used_by_a_channel_and_deleted() {
+    let mut h = harness_on_tab("APRS  0");
+    h.get_by_label_contains("No APRS configurations");
+    click(&mut h, "Add APRS configuration");
+    let aprs = |h: &H| h.state().doc.as_ref().unwrap().cp.aprs.clone();
+    assert_eq!((aprs(&h)[0].number, aprs(&h)[0].name.as_str()), (1, "APRS 1"));
+    h.get_by_label_contains("No channel uses it");
+
+    retype(&mut h, "SSID", "9");
+    retype(&mut h, "Path 1", "wide1-1");
+    retype(&mut h, "TX frequency MHz", "144.39");
+    retype(&mut h, "Path 2", "TOOLONGCALL"); // not a path: not applied
+    click(&mut h, "Beacon silently");
+    let a = &aprs(&h)[0];
+    assert_eq!((a.ssid, a.path1.as_str(), a.path2.as_str(), a.tx_hz, a.silent), (9, "WIDE1-1", "", 144_390_000, true));
+
+    // A channel picks it from the channel form.
+    click_prefix(&mut h, "Channels");
+    pick(&mut h, "APRS", "APRS 1");
+    assert_eq!(channel(&h).aprs, 1);
+    click(&mut h, "APRS  1"); // the tab, with its count
+    h.get_by_label_contains("1 channel(s) use it");
+
+    // Deleting it clears the channel's choice.
+    click(&mut h, "Delete configuration…");
+    h.get_by_label_contains("1 channel(s) stop using it");
+    click(&mut h, "Yes, delete it");
+    assert!(aprs(&h).is_empty());
+    assert_eq!(channel(&h).aprs, 0);
+}
