@@ -67,6 +67,13 @@ impl Image {
         Self { bytes: b }
     }
 
+    /// Grows the image to at least `len` bytes with erased flash (the ID database can reach past the usual span).
+    pub fn ensure(&mut self, len: usize) {
+        if self.bytes.len() < len {
+            self.bytes.resize(len, 0xFF);
+        }
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }

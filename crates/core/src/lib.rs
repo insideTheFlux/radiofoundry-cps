@@ -10,6 +10,7 @@ pub mod csv;
 pub mod diff;
 pub mod fields;
 pub mod freqs;
+pub mod iddb;
 pub mod image;
 pub mod kv;
 pub mod model;

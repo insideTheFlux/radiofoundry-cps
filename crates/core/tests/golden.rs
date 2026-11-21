@@ -852,3 +852,45 @@ fn qdmr_with_aprs_and_dtmf_matches_the_web_editor() {
     let want: Vec<Option<u64>> = gold["chAprs"].as_array().unwrap().iter().map(Value::as_u64).collect();
     assert_eq!(ch_aprs, want, "which channel uses which configuration");
 }
+
+/// The DMR ID database in format N (open-firmware-cps.md 7.5): for fixed and random record sets (accents, duplicates,
+/// out-of-range IDs, area 2, a limited end) the bytes written, the header, the count and what is read back are the web
+/// editor's. `RFCPS_IDDB_DIR` holds its `<case>.json` and `<case>.bin` (`iddb_gold.mjs`, see `docs/testing.md`).
+#[test]
+fn the_id_database_in_format_n_matches_the_web_editor() {
+    use rfcps_core::iddb::{self, Record};
+    let Ok(dir) = std::env::var("RFCPS_IDDB_DIR") else {
+        eprintln!("RFCPS_IDDB_DIR not set: skipped");
+        return;
+    };
+    let names: Vec<String> = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/index.json")).unwrap()).unwrap();
+    assert!(names.len() >= 10);
+    for name in names {
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/{name}.json")).unwrap()).unwrap();
+        let want_bytes = std::fs::read(format!("{dir}/{name}.bin")).unwrap();
+        let recs: Vec<Record> =
+            v["recs"].as_array().unwrap().iter().map(|r| Record { id: r["id"].as_u64().unwrap() as u32, text: r["text"].as_str().unwrap().into() }).collect();
+        let end = v["end"].as_u64().map_or(usize::MAX, |e| e as usize);
+        let mut img = Image::blank();
+        let w = iddb::write_n(&mut img, &recs, v["textLen"].as_u64().unwrap() as usize, end).unwrap();
+        let e = &v["expect"];
+        assert_eq!((w.count as u64, w.top as u64, w.dropped as u64, w.rec as u64), (e["count"].as_u64().unwrap(), e["top"].as_u64().unwrap(), e["dropped"].as_u64().unwrap(), e["rec"].as_u64().unwrap()), "{name}: counts");
+        let got = &img.bytes()[iddb::AREA1..w.top];
+        let diff = (0..got.len().max(want_bytes.len())).find(|&i| got.get(i) != want_bytes.get(i));
+        assert!(diff.is_none(), "{name}: bytes differ, first at +{:#x}", diff.unwrap());
+        let h = iddb::read_header(img.bytes());
+        match (&e["header"], h) {
+            (serde_json::Value::Null, None) => {}
+            (jh, Some(h)) => assert_eq!(
+                (jh["format"].as_str().unwrap().as_bytes()[0], jh["rec"].as_u64().unwrap() as usize, jh["count"].as_u64().unwrap() as u32, jh["textLen"].as_u64().unwrap() as usize),
+                (h.format, h.rec, h.count, h.text_len),
+                "{name}: header"
+            ),
+            (jh, h) => panic!("{name}: header {jh} vs {h:?}"),
+        }
+        let want_read: Vec<(u32, String)> = e["read"].as_array().unwrap().iter().map(|r| (r["id"].as_u64().unwrap() as u32, r["text"].as_str().unwrap().into())).collect();
+        let got_read: Vec<(u32, String)> = iddb::read(img.bytes()).into_iter().map(|r| (r.id, r.text)).collect();
+        assert_eq!(got_read, want_read, "{name}: read back");
+        assert_eq!(iddb::extent(img.bytes()) as u64, e["extent"].as_u64().unwrap(), "{name}: extent");
+    }
+}
