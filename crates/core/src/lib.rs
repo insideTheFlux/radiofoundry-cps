@@ -17,6 +17,8 @@ pub mod model;
 pub mod modes;
 pub mod problems;
 pub mod qdmr;
+pub mod radioid;
+pub mod regions;
 pub mod records;
 pub mod stock_dm32;
 pub mod systems;

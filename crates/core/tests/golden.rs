@@ -894,3 +894,66 @@ fn the_id_database_in_format_n_matches_the_web_editor() {
         assert_eq!(iddb::extent(img.bytes()) as u64, e["extent"].as_u64().unwrap(), "{name}: extent");
     }
 }
+
+/// The RadioID source (user.csv parsing, region and prefix selection, name templates, region counts) on random files
+/// with header variants, bad rows, duplicates and odd names. `RFCPS_RID_DIR` holds the web editor's `rid.json`
+/// (`rid_gold.mjs`, see `docs/testing.md`).
+#[test]
+fn the_radioid_source_matches_the_web_editor() {
+    use rfcps_core::radioid::{self, Selection};
+    let Ok(dir) = std::env::var("RFCPS_RID_DIR") else {
+        eprintln!("RFCPS_RID_DIR not set: skipped");
+        return;
+    };
+    let cases: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/rid.json")).unwrap()).unwrap();
+    assert!(cases.len() >= 6);
+    let s = |v: &serde_json::Value| v.as_str().unwrap().to_string();
+    for c in cases {
+        let name = s(&c["name"]);
+        let users = radioid::parse_users(c["text"].as_str().unwrap());
+        let want: Vec<radioid::User> = c["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| radioid::User {
+                id: u["id"].as_u64().unwrap() as u32,
+                call: s(&u["call"]),
+                name: s(&u["name"]),
+                last: s(&u["last"]),
+                city: s(&u["city"]),
+                state: s(&u["state"]),
+                country: s(&u["country"]),
+            })
+            .collect();
+        assert_eq!(users, want, "{name}: users");
+        for f in c["fmts"].as_array().unwrap() {
+            let (t, upper, max) = (s(&f["t"]), f["upper"].as_bool().unwrap(), f["max"].as_u64().unwrap() as usize);
+            for (u, w) in users.iter().zip(f["out"].as_array().unwrap()) {
+                assert_eq!(radioid::format(u, &t, upper, max), s(w), "{name}: template {t:?} upper {upper} max {max} for {u:?}");
+            }
+        }
+        for sel in c["sels"].as_array().unwrap() {
+            let j = &sel["sel"];
+            let d = Selection::default();
+            let sel_in = Selection {
+                regions: j["regions"].as_array().map_or(vec![], |a| a.iter().map(|r| (s(&r["country"]), r["state"].as_str().map(String::from))).collect()),
+                prefixes: j["prefixes"].as_array().map_or(vec![], |a| a.iter().map(s).collect()),
+                id_min: j["idMin"].as_u64().map_or(d.id_min, |v| v as u32),
+                id_max: j["idMax"].as_u64().map_or(d.id_max, |v| v as u32),
+            };
+            let got: Vec<u64> = radioid::select(&users, &sel_in).iter().map(|u| u64::from(u.id)).collect();
+            let want: Vec<u64> = sel["ids"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+            assert_eq!(got, want, "{name}: selection {j}");
+        }
+        type Regions = Vec<(String, u64, Vec<(String, u64)>)>;
+        let got: Regions =
+            radioid::regions_of(&users).into_iter().map(|r| (r.country, r.count as u64, r.states.into_iter().map(|(s, n)| (s, n as u64)).collect())).collect();
+        let want: Regions = c["regions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (s(&r["country"]), r["count"].as_u64().unwrap(), r["states"].as_array().unwrap().iter().map(|x| (s(&x["name"]), x["count"].as_u64().unwrap())).collect()))
+            .collect();
+        assert_eq!(got, want, "{name}: regions");
+    }
+}

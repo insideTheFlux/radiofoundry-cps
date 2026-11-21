@@ -62,6 +62,8 @@ radio image. They run only when these variables are set, and otherwise pass with
 | `RFCPS_SYS_DIR` | the web editor's whole images for fixed system edits (`edit_systems.mjs`: `newSystem` for a P25 trunked system with a site, a control channel and a plan row, a channel put on it, a rename and a second control channel, and the system deleted; `model.js` `encode()` and `remove()`) |
 | `RFCPS_T3_DIR` | the web editor's whole images for fixed Tier III edits (`edit_t3.mjs`: a system with every field set, two channels and a key with a PSN, a channel on it, the system's own `0x0800` and `0x0900` records put in, edits, and the system deleted) |
 | `RFCPS_APRS_DIR` | the web editor's whole images for DTMF contact and APRS configuration edits (`edit_aprs.mjs`: created, edited, deleted, and an APRS record in the older layout), its CSV export of an image that holds them (`csv/`), and its qdmr export and import (`qdmr/`: `qdmr_aprs_js.mjs`, with a `rich.yaml` of awkward APRS systems) |
+| `RFCPS_IDDB_DIR` | the web editor's DMR ID database in format N for fixed and random record sets (`iddb_gold.mjs`: records, text length and room in, the bytes written, header, count, read-back and extent out; `iddb.js`) |
+| `RFCPS_RID_DIR` | the web editor's RadioID source on random `user.csv` text (`rid_gold.mjs`: `parseUsers` with header variants and bad rows, `select`, `regionsOf`, `format` over many templates; `sources/radioid.js`) |
 
 ```
 RFCPS_IMAGE=... RFCPS_GOLDEN=... RFCPS_EDITED_JS=... cargo test -p rfcps-core --test golden -- --nocapture
