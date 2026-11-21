@@ -171,6 +171,22 @@ impl<P: Read + Write> Radio<P> {
         }
     }
 
+    /// The build's feature names from VERSION (`features=`, debuglink.md 3.1), e.g. `IDDB_COMPACT`.
+    pub fn features(&mut self) -> Result<Vec<String>> {
+        let text = self.request(0x02, &[])?;
+        let text = String::from_utf8_lossy(&text);
+        let list = text
+            .lines()
+            .find_map(|l| l.strip_prefix("features="))
+            .unwrap_or("");
+        Ok(list.split(',').filter(|s| !s.is_empty()).map(String::from).collect())
+    }
+
+    /// Does the radio's firmware read a format C DMR ID database (iddb-compact.md 6)?
+    pub fn reads_compact_iddb(&mut self) -> Result<bool> {
+        Ok(self.features()?.iter().any(|f| f == "IDDB_COMPACT"))
+    }
+
     /// Asks the radio to echo some bytes; proves a RadioFoundry debug link is on the other end.
     pub fn ping(&mut self) -> Result<()> {
         let echo = self.request(0x01, b"rfcps")?;

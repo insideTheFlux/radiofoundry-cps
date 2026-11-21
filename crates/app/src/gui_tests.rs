@@ -135,7 +135,7 @@ fn the_id_database_is_built_from_a_user_file_and_undone() {
     let mut h = tall(app);
     click_prefix(&mut h, "ID Database");
     assert!(h.state().tab == Tab::IdDb);
-    h.get_by_label("3 of 3 users selected. ID database size: 1 KB.");
+    h.get_by_label_contains("3 of 3 users selected. ID database size:");
     h.get_by_label("The codeplug has no DMR ID database.");
     click(&mut h, "Write ID Database");
     {
@@ -184,6 +184,40 @@ fn tall(app: App) -> H {
         });
     h.run();
     h
+}
+
+#[test]
+fn the_database_format_follows_what_the_radio_reads_and_an_old_one_can_be_converted() {
+    use worker::RadioFacts;
+    // a radio that reads only format N: the database is written as N
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.radio_facts = RadioFacts { compact: Some(false), end: None };
+    app.iddb.load_users(USERS, "user.csv".into());
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    click(&mut h, "Write ID Database");
+    let hd = h.state().doc.as_ref().unwrap().cp.iddb.clone().unwrap();
+    assert_eq!((hd.format, hd.count), (b'N', 3));
+    h.get_by_label_contains("holds a DMR ID database of 3 records");
+    // the radio is then found to read format C: the offer to convert
+    h.state_mut().radio_facts = RadioFacts { compact: Some(true), end: None };
+    h.run();
+    h.get_by_label_contains("This radio reads a compact database");
+    click(&mut h, "Convert");
+    let hd = h.state().doc.as_ref().unwrap().cp.iddb.clone().unwrap();
+    assert_eq!((hd.format, hd.count), (b'C', 3));
+    h.get_by_label_contains("holds a compact DMR ID database of 3 records");
+    click(&mut h, "Undo");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.iddb.as_ref().unwrap().format, b'N');
+    // with no radio known, a new database is compact
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.load_users(USERS, "user.csv".into());
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    click(&mut h, "Write ID Database");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.iddb.as_ref().unwrap().format, b'C');
 }
 
 fn disabled_by_prefix(h: &H, prefix: &str) -> bool {

@@ -42,6 +42,8 @@ pub struct FakeRadio {
     pub info_layout: Option<(u8, u32, u32, u32)>,
     /// Refuse the next END with this reason, once (the host should send the block again).
     pub refuse_next_end: Option<u8>,
+    /// The `features=` list VERSION reports.
+    pub features: String,
     /// Serve and take the blocks of the ID database too (a radio whose image reaches that far).
     pub serve_iddb: bool,
     /// The blocks written so far, in order.
@@ -61,6 +63,7 @@ impl FakeRadio {
             stage_max: 0,
             info_layout: None,
             refuse_next_end: None,
+            features: "FM,DMR,CPS_FAST".into(),
             serve_iddb: false,
             written_blocks: Vec::new(),
         }
@@ -93,6 +96,11 @@ impl FakeRadio {
             (0x01, _) => {
                 let mut r = vec![0];
                 r.extend_from_slice(p);
+                self.reply(cmd, seq, r);
+            }
+            (0x02, _) => {
+                let mut r = vec![0];
+                r.extend_from_slice(format!("proto=1\nboard=FAKE\nfeatures={}\n", self.features).as_bytes());
                 self.reply(cmd, seq, r);
             }
             (0x1C, Some(0)) => {

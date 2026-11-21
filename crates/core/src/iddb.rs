@@ -18,9 +18,9 @@ pub const HEADER: usize = 12;
 /// The most characters a record keeps (`DMR_IDDB_TEXT_MAX`).
 pub const TEXT_MAX: usize = 48;
 pub const TEXT_LENGTHS: [usize; 4] = [16, 24, 32, 48];
-const ALPHABET: &[u8; 64] = b" 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.";
-const C_HEADER: usize = 32;
-const PAGE: usize = 4096;
+pub(crate) const ALPHABET: &[u8; 64] = b" 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.";
+pub(crate) const C_HEADER: usize = 32;
+pub(crate) const PAGE: usize = 4096;
 
 /// The bytes a record takes for a text length.
 pub const fn record_size(text_len: usize) -> usize {
@@ -97,9 +97,25 @@ pub struct Header {
     pub text_len: usize,
     /// Format C: the database space in bytes; 0 otherwise.
     pub size: usize,
+    /// Format C: where its sections are.
+    pub compact: Option<Compact>,
 }
 
-fn le(b: &[u8], o: usize, n: usize) -> u64 {
+/// A format C header's section offsets (iddb-compact.md 3.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compact {
+    /// The first record page.
+    pub first: usize,
+    /// Database offsets of the index, the dictionary's table and its strings.
+    pub index: usize,
+    pub table: usize,
+    pub strings: usize,
+    /// Index entries (record pages in use) and dictionary entries.
+    pub pages: usize,
+    pub dict: usize,
+}
+
+pub(crate) fn le(b: &[u8], o: usize, n: usize) -> u64 {
     (0..n).rev().fold(0u64, |v, i| v * 256 + u64::from(b[o + i]))
 }
 
@@ -112,7 +128,21 @@ fn compact_header(b: &[u8]) -> Option<Header> {
     if count == 0 || size == 0 || size % PAGE as u64 != 0 {
         return None;
     }
-    Some(Header { format: b'C', rec: 0, count: count as u32, text_len: usize::from(h[5]), size: size as usize })
+    Some(Header {
+        format: b'C',
+        rec: 0,
+        count: count as u32,
+        text_len: usize::from(h[5]),
+        size: size as usize,
+        compact: Some(Compact {
+            first: le(h, 6, 2) as usize,
+            index: le(h, 16, 4) as usize,
+            pages: le(h, 20, 2) as usize,
+            dict: le(h, 22, 2) as usize,
+            table: le(h, 24, 4) as usize,
+            strings: le(h, 28, 4) as usize,
+        }),
+    })
 }
 
 /// The header as stored, or `None` without a database.
@@ -133,7 +163,7 @@ pub fn read_header(b: &[u8]) -> Option<Header> {
     // Whole characters only: a record size another program chose (qdmr takes any) can end in spare bits, as the
     // radio's decoder (dmr_iddb.c) rounds down too
     let text_len = if packed { (rec - 3) * 4 / 3 } else { rec - 4 };
-    Some(Header { format: h[2], rec, count, text_len, size: 0 })
+    Some(Header { format: h[2], rec, count, text_len, size: 0, compact: None })
 }
 
 fn rec_addr(i: usize, rec: usize) -> usize {
@@ -158,7 +188,9 @@ pub struct Written {
     pub top: usize,
     /// Records that did not fit before `end`.
     pub dropped: usize,
+    /// Bytes per record (format N); 0 for format C.
     pub rec: usize,
+    pub format: u8,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -195,7 +227,7 @@ pub fn write_n(image: &mut Image, records: &[Record], text_len: usize, end: usiz
     for (i, r) in list.iter().enumerate() {
         pack_record(b, rec_addr(i, rec), r.id, &clean(&r.text), text_len);
     }
-    Ok(Written { count: list.len(), top, dropped, rec })
+    Ok(Written { count: list.len(), top, dropped, rec, format: b'N' })
 }
 
 /// No database: the header's tag erased (the radio then ignores the records).
@@ -221,9 +253,12 @@ fn pack_record(b: &mut [u8], a: usize, id: u32, text: &str, text_len: usize) {
     }
 }
 
-/// Every record of a format N database, for a preview or a check. Other formats give none.
+/// Every record of a format N or C database, for a preview or a check. Other formats give none.
 pub fn read(b: &[u8]) -> Vec<Record> {
     let Some(h) = read_header(b) else { return Vec::new() };
+    if h.format == b'C' {
+        return crate::iddb_compact::read(b);
+    }
     if h.format != b'N' {
         return Vec::new();
     }
@@ -248,13 +283,61 @@ pub fn read(b: &[u8]) -> Vec<Record> {
     out
 }
 
-/// The image address just past a format N database (where a read must reach to hold it whole), or 0 without one or
-/// for a format this editor can't measure yet.
+/// The image address just past a database (where a read must reach to hold it whole), or 0 without one.
 pub fn extent(b: &[u8]) -> usize {
     match read_header(b) {
-        Some(h) if h.format != b'C' => rec_addr(h.count as usize - 1, h.rec) + h.rec,
-        _ => 0,
+        Some(h) if h.format == b'C' => crate::iddb_compact::db_addr(h.size - 1) + 1,
+        Some(h) => rec_addr(h.count as usize - 1, h.rec) + h.rec,
+        None => 0,
     }
+}
+
+/// About how many bytes format C takes for these records and how many fit before `end` (`usize::MAX`: any room).
+pub fn estimate_compact(records: &[Record], end: usize) -> (usize, usize) {
+    crate::iddb_compact::estimate(records, end)
+}
+
+/// How `write` lays the database out.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    /// `b'N'` or `b'C'`.
+    pub format: u8,
+    /// Format N: characters per record (one of `TEXT_LENGTHS`).
+    pub text_len: usize,
+    /// The image address the database may reach.
+    pub end: usize,
+    /// Format C: write from nothing, not against a database already in the image (iddb-compact.md 4.2).
+    pub fresh: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self { format: b'N', text_len: 32, end: usize::MAX, fresh: false }
+    }
+}
+
+/// The database written into the image in the format chosen; format C is written against a format C database already
+/// in the image unless `fresh`.
+pub fn write(image: &mut Image, records: &[Record], o: Options) -> Result<Written, IddbError> {
+    if o.format == b'C' {
+        Ok(crate::iddb_compact::write(image, records, o.end, o.fresh))
+    } else {
+        write_n(image, records, o.text_len, o.end)
+    }
+}
+
+/// The database written again in another format: the records read back, then written as `format` (N: each text keeps
+/// the length the longest one needs, so none is cut). `None` when the image holds no database, holds it in that format
+/// already, or in one `read` can't give back (format n, other programs' formats): those are left as they are.
+pub fn convert(image: &mut Image, format: u8, end: usize) -> Option<Written> {
+    let h = read_header(image.bytes())?;
+    if h.format == format || (h.format != b'N' && h.format != b'C') {
+        return None;
+    }
+    let records = read(image.bytes());
+    let longest = records.iter().map(|r| r.text.chars().count()).max().unwrap_or(0);
+    let text_len = TEXT_LENGTHS.iter().copied().find(|&n| n >= longest).unwrap_or(TEXT_MAX);
+    write(image, &records, Options { format, text_len, end, fresh: true }).ok()
 }
 
 /// The image address a write of the database must reach: its extent, or just the header when there is none (an erased

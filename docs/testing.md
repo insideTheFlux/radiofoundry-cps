@@ -69,6 +69,7 @@ read an image from a radio here, use `rfcps --read PORT out.bin`.
 | `RFCPS_APRS_DIR` | the web editor's whole images for DTMF contact and APRS configuration edits (`edit_aprs.mjs`: created, edited, deleted, and an APRS record in the older layout), its CSV export of an image that holds them (`csv/`), and its qdmr export and import (`qdmr/`: `qdmr_aprs_js.mjs`, with a `rich.yaml` of awkward APRS systems) |
 | `RFCPS_IDDB_DIR` | the web editor's DMR ID database in format N for fixed and random record sets (`iddb_gold.mjs`: records, text length and room in, the bytes written, header, count, read-back and extent out; `iddb.js`) |
 | `RFCPS_RID_DIR` | the web editor's RadioID source on random `user.csv` text (`rid_gold.mjs`: `parseUsers` with header variants and bad rows, `select`, `regionsOf`, `format` over many templates; `sources/radioid.js`) |
+| `RFCPS_IDDBC_DIR` | the web editor's DMR ID database in format C and the conversions (`iddbc_gold.mjs`: steps on one image, namely writes in either format fresh or against what is there, converts and an erase, with room limits and page splits; whole image, each step's answer, read-back, extent and size estimate out) |
 
 ```
 RFCPS_IMAGE=... RFCPS_GOLDEN=... RFCPS_EDITED_JS=... cargo test -p rfcps-core --test golden -- --nocapture

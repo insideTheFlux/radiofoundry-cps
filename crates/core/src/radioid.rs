@@ -348,6 +348,13 @@ pub fn iddb_size(count: usize, text_len: usize, end: usize) -> Size {
     Size { rec, bytes: iddb::HEADER + count.min(fit) * rec, fit }
 }
 
+/// The room a format C database takes (a measure from the whole list laid out; `rec` is 0): bytes and how many records
+/// fit before `end` (`usize::MAX`: any).
+pub fn iddb_size_c(records: &[Record], end: usize) -> Size {
+    let (bytes, fit) = iddb::estimate_compact(records, end);
+    Size { rec: 0, bytes, fit }
+}
+
 // --- Private-call contacts from users ---
 
 /// Names are stored in Latin-1: other characters lose their accents (Ł to L) or are dropped.

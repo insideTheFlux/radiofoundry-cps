@@ -5,6 +5,7 @@
 //! "Build from RadioID.net", file mode). The database lives in the document's image; Write to Radio sends it.
 
 use crate::doc::Doc;
+use crate::worker::RadioFacts;
 use crate::theme;
 use eframe::egui::{self, Ui};
 use rfcps_core::iddb;
@@ -12,8 +13,9 @@ use rfcps_core::radioid::{self, Selection, User};
 use rfcps_core::regions::COUNTRIES;
 use std::collections::{BTreeSet, HashMap};
 
-/// The inputs as one string, how many users they select, and the first few as (ID, database text, contact name).
-type Cached = (String, usize, Vec<(u32, String, String)>);
+/// The inputs as one string, how many users they select, the first few as (ID, database text, contact name), and the
+/// room the database takes.
+type Cached = (String, usize, Vec<(u32, String, String)>, radioid::Size);
 
 pub struct IdDbUi {
     users: Option<Vec<User>>,
@@ -66,6 +68,16 @@ impl Default for IdDbUi {
     }
 }
 
+/// The database format to write: C unless the radio is known to read only N. Without a radio, C: a write to a radio
+/// without it converts (iddb-compact.md 6).
+fn format_of(facts: RadioFacts) -> u8 {
+    if facts.compact == Some(false) {
+        b'N'
+    } else {
+        b'C'
+    }
+}
+
 fn number(s: &str, default: u32) -> u32 {
     let s = s.trim();
     if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
@@ -114,12 +126,12 @@ impl IdDbUi {
         }
     }
 
-    fn write_db(&mut self, doc: &mut Doc) {
+    fn write_db(&mut self, doc: &mut Doc, facts: RadioFacts) {
         let Some(users) = &self.users else { return };
         let sel = self.selected(users);
         let recs = radioid::iddb_records(&sel, &self.template, self.upper, self.text_len);
-        let len = self.text_len;
-        match doc.change_iddb(|img| iddb::write_n(img, &recs, len, usize::MAX)) {
+        let o = iddb::Options { format: format_of(facts), text_len: self.text_len, end: facts.end.unwrap_or(usize::MAX), fresh: false };
+        match doc.change_iddb(|img| iddb::write(img, &recs, o)) {
             Ok(w) => {
                 let mut m = format!("The ID database now holds {} record{}. Write to Radio sends it.", w.count, if w.count == 1 { "" } else { "s" });
                 if w.dropped > 0 {
@@ -147,7 +159,7 @@ impl IdDbUi {
     }
 }
 
-pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi) {
+pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
     let pal = theme::palette(ui);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_max_width(760.0);
@@ -155,8 +167,19 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi) {
         match &doc.cp.iddb {
             Some(h) => {
                 let n = h.count;
-                let what = if h.format == b'C' { "a compact DMR ID database" } else { "a DMR ID database" };
-                ui.label(format!("The codeplug holds {what} of {n} record{}, {} characters each.", if n == 1 { "" } else { "s" }, h.text_len));
+                let (what, each) = if h.format == b'C' { ("a compact DMR ID database", "up to") } else { ("a DMR ID database", "") };
+                ui.label(format!("The codeplug holds {what} of {n} record{}, {each} {} characters each.", if n == 1 { "" } else { "s" }, h.text_len).replace("  ", " "));
+                // a database in format N for a radio that reads format C: the offer to convert (iddb-compact.md 6)
+                if h.format == b'N' && facts.compact == Some(true) {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(pal.warn, "This radio reads a compact database: smaller, with room for more names and faster writes.");
+                        if ui.button("Convert").clicked() {
+                            let end = facts.end.unwrap_or(usize::MAX);
+                            let r = doc.change_iddb(|img| iddb::convert(img, b'C', end));
+                            st.message = r.map(|w| (format!("The ID database was converted: {} records. Write to Radio sends it.", w.count), false));
+                        }
+                    });
+                }
                 if ui.button("Remove ID Database").clicked() {
                     st.confirm = Some(Confirm::Remove);
                 }
@@ -306,14 +329,20 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi) {
 
         // Preview, summary and the two actions
         let total = st.users.as_ref().map_or(0, Vec::len);
+        let end = facts.end.unwrap_or(usize::MAX);
         let key = format!(
-            "{:?}|{}|{}|{}|{}|{}|{}|{}",
-            st.regions, st.prefixes, st.id_min, st.id_max, st.template, st.contact_template, st.upper, st.text_len
+            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{end}",
+            st.regions, st.prefixes, st.id_min, st.id_max, st.template, st.contact_template, st.upper, st.text_len, format_of(facts)
         );
         if st.cache.as_ref().map(|c| &c.0) != Some(&key) {
-            let (count, preview) = match &st.users {
+            let (count, preview, size) = match &st.users {
                 Some(users) => {
                     let sel = st.selected(users);
+                    let size = if format_of(facts) == b'C' {
+                        radioid::iddb_size_c(&radioid::iddb_records(&sel, &st.template, st.upper, st.text_len), end)
+                    } else {
+                        radioid::iddb_size(sel.len(), st.text_len, end)
+                    };
                     let prev = sel
                         .iter()
                         .take(6)
@@ -325,13 +354,13 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi) {
                             )
                         })
                         .collect();
-                    (sel.len(), prev)
+                    (sel.len(), prev, size)
                 }
-                None => (0, Vec::new()),
+                None => (0, Vec::new(), radioid::iddb_size(0, 16, end)),
             };
-            st.cache = Some((key, count, preview));
+            st.cache = Some((key, count, preview, size));
         }
-        let (count, preview) = st.cache.as_ref().map(|c| (c.1, c.2.clone())).unwrap_or_default();
+        let (count, preview, size) = st.cache.as_ref().map(|c| (c.1, c.2.clone(), c.3)).expect("just filled");
         ui.add_space(6.0);
         ui.strong("Preview");
         if preview.is_empty() {
@@ -354,10 +383,12 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi) {
         if st.users.is_none() {
             ui.label("Open a RadioID user file to begin.");
         } else {
-            let size = radioid::iddb_size(count, st.text_len, usize::MAX);
             let mut t = format!("{count} of {total} users selected.");
             if count > 0 {
                 t += &format!(" ID database size: {} KB.", size.bytes.div_ceil(1024));
+                if size.fit != usize::MAX && count > size.fit {
+                    t += &format!(" This radio holds only {} at this text length; the rest would be left out. Use a shorter text length or fewer regions.", size.fit);
+                }
             }
             ui.label(t);
         }
@@ -366,7 +397,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi) {
                 if doc.cp.iddb.is_some() {
                     st.confirm = Some(Confirm::Replace);
                 } else {
-                    st.write_db(doc);
+                    st.write_db(doc, facts);
                 }
             }
             if ui.add_enabled(count > 0, egui::Button::new("Add as Contacts")).clicked() {
@@ -404,7 +435,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi) {
         } else if go {
             st.confirm = None;
             match c {
-                Confirm::Replace => st.write_db(doc),
+                Confirm::Replace => st.write_db(doc, facts),
                 Confirm::Remove => {
                     doc.change_iddb(iddb::erase);
                     st.message = Some(("The ID database was removed. Write to Radio sends that.".into(), false));

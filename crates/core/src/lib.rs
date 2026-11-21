@@ -11,6 +11,7 @@ pub mod diff;
 pub mod fields;
 pub mod freqs;
 pub mod iddb;
+mod iddb_compact;
 pub mod image;
 pub mod kv;
 pub mod model;

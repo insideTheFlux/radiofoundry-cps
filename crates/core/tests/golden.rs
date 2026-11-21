@@ -980,3 +980,77 @@ fn the_radioid_source_matches_the_web_editor() {
         assert_eq!(got, want, "{name}: regions");
     }
 }
+
+/// Format C of the ID database and the conversion between formats: steps (write C or N, fresh or against what is in the
+/// image, convert, erase) on one image, compared with the web editor's whole image after the steps, each step's answer,
+/// the read-back, the extent and the size estimate. `RFCPS_IDDBC_DIR` holds `<case>.json` and `<case>.bin`
+/// (`iddbc_gold.mjs`, see `docs/testing.md`).
+#[test]
+fn the_id_database_in_format_c_matches_the_web_editor() {
+    use rfcps_core::iddb::{self, Options, Record};
+    let Ok(dir) = std::env::var("RFCPS_IDDBC_DIR") else {
+        eprintln!("RFCPS_IDDBC_DIR not set: skipped");
+        return;
+    };
+    let names: Vec<String> = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/index.json")).unwrap()).unwrap();
+    assert!(names.len() >= 15);
+    let recs = |v: &serde_json::Value| -> Vec<Record> {
+        v.as_array().unwrap().iter().map(|r| Record { id: r["id"].as_u64().unwrap() as u32, text: r["text"].as_str().unwrap().into() }).collect()
+    };
+    let end_of = |v: &serde_json::Value| v.as_u64().map_or(usize::MAX, |e| e as usize);
+    for name in names {
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/{name}.json")).unwrap()).unwrap();
+        let want_bytes = std::fs::read(format!("{dir}/{name}.bin")).unwrap();
+        let e = &v["expect"];
+        let mut img = Image::blank();
+        for (i, st) in v["steps"].as_array().unwrap().iter().enumerate() {
+            let want = &e["results"][i];
+            let got = match st["op"].as_str().unwrap() {
+                "write" => {
+                    let o = Options {
+                        format: st["format"].as_str().unwrap().as_bytes()[0],
+                        text_len: st["textLen"].as_u64().unwrap() as usize,
+                        end: end_of(&st["end"]),
+                        fresh: st["fresh"].as_bool().unwrap(),
+                    };
+                    Some(iddb::write(&mut img, &recs(&st["records"]), o).unwrap())
+                }
+                "convert" => iddb::convert(&mut img, st["format"].as_str().unwrap().as_bytes()[0], end_of(&st["end"])),
+                _ => {
+                    iddb::erase(&mut img);
+                    None
+                }
+            };
+            match (got, want) {
+                (None, serde_json::Value::Null) => {}
+                (Some(g), w) => assert_eq!(
+                    (g.count as u64, g.top as u64, g.dropped as u64, g.format),
+                    (w["count"].as_u64().unwrap(), w["top"].as_u64().unwrap(), w["dropped"].as_u64().unwrap(), w["format"].as_str().unwrap().as_bytes()[0]),
+                    "{name}: step {i} answer"
+                ),
+                (g, w) => panic!("{name}: step {i}: {g:?} vs {w}"),
+            }
+        }
+        let got = img.bytes();
+        let diff = (0..got.len().max(want_bytes.len())).find(|&i| got.get(i) != want_bytes.get(i));
+        assert!(diff.is_none(), "{name}: image differs, first at {:#x}", diff.unwrap());
+        match (&e["header"], iddb::read_header(img.bytes())) {
+            (serde_json::Value::Null, None) => {}
+            (jh, Some(h)) => assert_eq!(
+                (jh["format"].as_str().unwrap().as_bytes()[0], jh["count"].as_u64().unwrap() as u32, jh["textLen"].as_u64().unwrap() as usize),
+                (h.format, h.count, h.text_len),
+                "{name}: header"
+            ),
+            (jh, h) => panic!("{name}: header {jh} vs {h:?}"),
+        }
+        let want_read: Vec<(u32, String)> = e["read"].as_array().unwrap().iter().map(|r| (r["id"].as_u64().unwrap() as u32, r["text"].as_str().unwrap().into())).collect();
+        let got_read: Vec<(u32, String)> = iddb::read(img.bytes()).into_iter().map(|r| (r.id, r.text)).collect();
+        assert_eq!(got_read, want_read, "{name}: read back");
+        assert_eq!(iddb::extent(img.bytes()) as u64, e["extent"].as_u64().unwrap(), "{name}: extent");
+        if !e["est"].is_null() {
+            let (bytes, fit) = iddb::estimate_compact(&recs(&e["estRecs"]), end_of(&e["estEnd"]));
+            let want_fit = e["est"]["fit"].as_u64().map_or(usize::MAX, |f| f as usize);
+            assert_eq!((bytes as u64, fit), (e["est"]["bytes"].as_u64().unwrap(), want_fit), "{name}: estimate");
+        }
+    }
+}

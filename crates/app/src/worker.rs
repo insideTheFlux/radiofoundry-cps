@@ -7,7 +7,16 @@ use eframe::egui;
 use rfcps_core::Image;
 use std::sync::mpsc::{channel, Receiver};
 
+/// What a read learned about the radio besides its codeplug, for the ID database: whether its firmware reads a format C
+/// database (`None`: it did not say) and where its image ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RadioFacts {
+    pub compact: Option<bool>,
+    pub end: Option<usize>,
+}
+
 pub enum Msg {
+    Facts(RadioFacts),
     Progress(usize, usize),
     Done(Result<Image, String>),
 }
@@ -21,12 +30,18 @@ pub fn read_radio(port: String, ctx: egui::Context) -> Receiver<Msg> {
             radio.ping().map_err(|e| {
                 format!("{e} (is it a RadioFoundry radio, switched on, on this port?)")
             })?;
-            radio
+            let img = radio
                 .read_image(&mut |done, total| {
                     let _ = tx.send(Msg::Progress(done, total));
                     ctx.request_repaint();
                 })
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            let facts = RadioFacts {
+                compact: radio.reads_compact_iddb().ok(),
+                end: radio.checked_info().ok().map(|i| i.image_end as usize),
+            };
+            let _ = tx.send(Msg::Facts(facts));
+            Ok(img)
         })();
         let _ = tx.send(Msg::Done(result));
         ctx.request_repaint();
@@ -44,6 +59,8 @@ pub struct WriteDone {
     pub blocks: usize,
     /// Blocks of the ID database sent (the header's counts twice); `None` when it was not part of the write.
     pub iddb_blocks: Option<usize>,
+    /// Something to tell about how the database was written.
+    pub iddb_note: Option<String>,
     pub backup: std::path::PathBuf,
 }
 
@@ -87,11 +104,31 @@ fn send_iddb<P: std::io::Read + std::io::Write>(
     radio: &mut rfcps_link::Radio<P>,
     image: &Image,
     say: &dyn Fn(WriteMsg),
-) -> Result<Option<usize>, String> {
+) -> Result<(usize, Option<String>), String> {
+    use rfcps_core::iddb;
+    let mut note = None;
+    let mut image = std::borrow::Cow::Borrowed(image);
+    // A compact database goes to a radio that reads only format N as format N (iddb-compact.md 6)
+    let compact = iddb::read_header(image.bytes()).is_some_and(|h| h.format == b'C');
+    if compact && radio.reads_compact_iddb().is_ok_and(|c| !c) {
+        let end = radio.checked_info().map_or(usize::MAX, |i| i.image_end as usize);
+        let mut n = image.clone().into_owned();
+        if let Some(w) = iddb::convert(&mut n, b'N', end) {
+            note = Some(if w.dropped > 0 {
+                format!(
+                    "This radio's firmware reads only the older ID database format, so it was written in that format; {} name(s) did not fit and were left out. A firmware update makes room.",
+                    w.dropped
+                )
+            } else {
+                "This radio's firmware reads only the older ID database format, so it was written in that format.".to_string()
+            });
+            image = std::borrow::Cow::Owned(n);
+        }
+    }
     say(WriteMsg::Phase("Writing the ID database…".into()));
     radio
-        .write_iddb(image, &mut |d, t| say(WriteMsg::Progress(d, t)))
-        .map(|r| Some(r.blocks))
+        .write_iddb(&image, &mut |d, t| say(WriteMsg::Progress(d, t)))
+        .map(|r| (r.blocks, note))
         .map_err(|e| format!("{e}. The codeplug itself was written before the ID database."))
 }
 
@@ -128,10 +165,11 @@ pub fn write_radio(
             // The ID database goes in a session of its own after the codeplug (iddb-compact.md 4.3). It is not part of
             // the backup: it can be megabytes, and the radio keeps its own copy only until it is replaced.
             if differs.is_empty() {
-                let iddb_blocks = if iddb { send_iddb(&mut radio, &image, &say)? } else { None };
+                let (iddb_blocks, iddb_note) = if iddb { let (b, n) = send_iddb(&mut radio, &image, &say)?; (Some(b), n) } else { (None, None) };
                 return Ok(WriteDone {
                     blocks: 0,
                     iddb_blocks,
+                    iddb_note,
                     backup: std::path::PathBuf::new(),
                 });
             }
@@ -158,10 +196,11 @@ pub fn write_radio(
                         backup.display()
                     )
                 })?;
-            let iddb_blocks = if iddb { send_iddb(&mut radio, &image, &say)? } else { None };
+            let (iddb_blocks, iddb_note) = if iddb { let (b, n) = send_iddb(&mut radio, &image, &say)?; (Some(b), n) } else { (None, None) };
             Ok(WriteDone {
                 blocks: report.blocks,
                 iddb_blocks,
+                iddb_note,
                 backup,
             })
         })();
@@ -172,6 +211,45 @@ pub fn write_radio(
 
 #[cfg(test)]
 mod tests {
+    use rfcps_core::iddb::{self, Options, Record};
+    use rfcps_core::Image;
+    use rfcps_link::{fake::FakeRadio, Radio};
+
+    fn compact_image() -> Image {
+        let recs: Vec<Record> = (1..=200).map(|i| Record { id: 5000 + i, text: format!("K{i}ABC Name {i}") }).collect();
+        let mut img = Image::blank();
+        iddb::write(&mut img, &recs, Options { format: b'C', ..Default::default() }).unwrap();
+        img
+    }
+
+    fn radio(features: &str) -> Radio<FakeRadio> {
+        let mut f = FakeRadio::new(Image::blank().bytes());
+        f.serve_iddb = true;
+        f.features = features.into();
+        Radio::new(f)
+    }
+
+    #[test]
+    fn a_compact_database_goes_to_an_old_radio_as_format_n() {
+        let mut r = radio("FM,DMR,CPS_FAST");
+        let (blocks, note) = super::send_iddb(&mut r, &compact_image(), &|_| {}).unwrap();
+        assert!(blocks > 0);
+        assert!(note.unwrap().contains("older ID database format"));
+        let got = Image::from_bytes(r.port_mut().image());
+        let h = iddb::read_header(got.bytes()).unwrap();
+        assert_eq!((h.format, h.count), (b'N', 200));
+        assert_eq!(iddb::read(got.bytes()).len(), 200);
+    }
+
+    #[test]
+    fn a_compact_database_goes_to_a_radio_that_reads_it_as_it_is() {
+        let mut r = radio("FM,DMR,CPS_FAST,IDDB_COMPACT");
+        let (_, note) = super::send_iddb(&mut r, &compact_image(), &|_| {}).unwrap();
+        assert!(note.is_none());
+        let got = Image::from_bytes(r.port_mut().image());
+        assert_eq!(iddb::read_header(got.bytes()).unwrap().format, b'C');
+    }
+
     #[test]
     fn the_stamp_is_a_date_and_a_time() {
         let s = super::stamp();

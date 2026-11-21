@@ -209,6 +209,9 @@ impl Flow {
                             } else {
                                 format!("The radio now holds this codeplug ({} block(s) written and read back to verify). Backup of the old codeplug: {}", w.blocks, w.backup.display())
                             };
+                            if let Some(note) = &w.iddb_note {
+                                text += &format!(" {note}");
+                            }
                             if let Some(n) = w.iddb_blocks {
                                 text += &if n == 0 {
                                     " The radio already held this ID database.".to_string()

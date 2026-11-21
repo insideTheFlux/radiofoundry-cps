@@ -98,3 +98,33 @@ fn a_database_past_the_radios_image_is_refused_before_anything_is_written() {
     ));
     assert!(r.port_mut().written_blocks.is_empty());
 }
+
+#[test]
+fn the_radio_says_whether_it_reads_a_compact_database() {
+    let mut r = radio();
+    assert!(!r.reads_compact_iddb().unwrap());
+    r.port_mut().features = "FM,DMR,IDDB_COMPACT,CPS_FAST".into();
+    assert!(r.reads_compact_iddb().unwrap());
+    assert!(r.features().unwrap().contains(&"DMR".to_string()));
+}
+
+#[test]
+fn a_compact_database_writes_and_reads_back_through_the_link() {
+    let mut r = radio();
+    let mut img = Image::blank();
+    iddb::write(&mut img, &records(3000), iddb::Options { format: b'C', ..Default::default() }).unwrap();
+    r.write_iddb(&img, &mut |_, _| {}).unwrap();
+    let got = Image::from_bytes(r.port_mut().image());
+    assert_eq!(iddb::read(got.bytes()), iddb::read(img.bytes()));
+    assert_eq!(iddb::read(got.bytes()).len(), 3000);
+    // a refresh writes only the pages that changed, with the header's block first and last
+    let mut next = img.clone();
+    let mut recs = records(3000);
+    recs[10].text = "Changed Name".into();
+    iddb::write(&mut next, &recs, iddb::Options { format: b'C', ..Default::default() }).unwrap();
+    r.port_mut().written_blocks.clear();
+    let rep = r.write_iddb(&next, &mut |_, _| {}).unwrap();
+    assert!(rep.blocks < 12, "only the changed pages and the header's block twice: {}", rep.blocks);
+    let w = &r.port_mut().written_blocks;
+    assert_eq!((w.first(), w.last()), (Some(&HEAD), Some(&HEAD)));
+}

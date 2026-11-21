@@ -58,6 +58,8 @@ struct App {
     channel: Option<u16>,
     contact: Option<u16>,
     iddb: iddbtab::IdDbUi,
+    /// What the last read learned about the radio (for the ID database).
+    radio_facts: worker::RadioFacts,
     list: usize,
     /// The selected system's number (the Systems tab).
     system: Option<u16>,
@@ -102,6 +104,7 @@ impl App {
             channel: None,
             contact: None,
             iddb: iddbtab::IdDbUi::default(),
+            radio_facts: worker::RadioFacts::default(),
             list: 0,
             system: None,
             dtmf: None,
@@ -129,6 +132,7 @@ impl App {
         let mut done = None;
         while let Ok(m) = rx.try_recv() {
             match m {
+                Msg::Facts(f) => self.radio_facts = f,
                 Msg::Progress(d, t) => self.progress = (d, t),
                 Msg::Done(r) => done = Some(r),
             }
@@ -945,7 +949,7 @@ impl eframe::App for App {
                 Tab::Channels => channels::show(ui, &mut doc.cp, &mut self.channel),
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
                 Tab::Contacts => contacts::show(ui, &mut doc.cp, &mut self.contact),
-                Tab::IdDb => iddbtab::show(ui, doc, &mut self.iddb),
+                Tab::IdDb => iddbtab::show(ui, doc, &mut self.iddb, self.radio_facts),
                 Tab::Lists => lists::show(ui, &mut doc.cp, &mut self.list),
                 Tab::Dtmf => dtmf::show(ui, &mut doc.cp, &mut self.dtmf),
                 Tab::Aprs => aprs::show(ui, &mut doc.cp, &mut self.aprs),
