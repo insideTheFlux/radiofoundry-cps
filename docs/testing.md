@@ -41,7 +41,7 @@ DTMF contacts and APRS configurations have their own tabs and an APRS choice on 
 and delete them, and a channel picks a configuration, which a delete clears. CSV (`dtmf-contacts.csv`, `aprs.csv`, and
 the channel table's APRS column naming the configuration) and qdmr (`positioning` APRS systems, `gnss` fixed position,
 DTMF contacts after the digital ones) both match the web editor, and a link test writes both tables to the software radio.
-On a real radio, `crates/link/examples/iddb_probe.rs` asks about the database (read only), and `iddb_test.rs` is a write test that undoes itself: it saves the codeplug and every database block it will touch, writes a database in format C and then in format N from a real `user.csv`, checks each by read-back and by the radio's own lookup (the debug link's IDDB command), and restores the saved blocks. Run it only with a backup you have looked at. On a DM-32UV (2026-11-21) it passed with 1,506 and with 40,000 records, the second reaching into area 2, and the radio ended with no database and the codeplug unchanged. The download of the user file is tested against a small server on this computer (a whole file with progress, an error status, a stop, nothing listening); one ignored test fetches the real file over TLS (`cargo test -p rfcps radioid_net -- --ignored`, about 17 MB). The ID database tab is covered by GUI tests (build a database from a user file, replace it after a question, remove it, undo, and add the users as contacts once) and by tests of the document's history; the link tests write the database to the software radio with the header block first erased and last written.
+The ID database tab is covered by GUI tests (build a database from a user file, replace it after a question, remove it, undo, add the users as contacts once, convert a format N database, download the user file from a server on this computer) and by tests of the document's history; the link tests write the database to the software radio with the header block first erased and last written, and the download is tested against a small local server (one ignored test fetches the real file over TLS: `cargo test -p rfcps radioid_net -- --ignored`). On a real radio, `crates/link/examples/iddb_probe.rs` asks about the database (read only) and `iddb_test.rs` is a write test that undoes itself: it saves the codeplug and every database block it will touch, writes a database in format C then N from a real `user.csv`, checks each by read-back and the radio's own lookup, and restores the saved blocks. Run it only with a backup you have looked at.
 Save image
 asks before it carries a secret key (a GUI test; the file dialog itself is not driven).
 
@@ -51,15 +51,11 @@ on a radio cover it), and pixel snapshots (`egui_kittest`'s `snapshot` feature, 
 ## Against the web editor on a real image (local only)
 
 The decoder and encoder are ported from RadioFoundry's web editor. Three more tests compare them with it on a real
-radio image. They run only when these variables are set, and otherwise pass without checking anything. The scripts that
-make the web editor's side (named in the table) are small Node scripts over the modules in `site/static/js/codeplug/` of the
-RadioFoundry repository; they are not part of this repository, and neither is `tools/cps_fast.py` (RadioFoundry's). To
-read an image from a radio here, use `rfcps --read PORT out.bin`.
-
+radio image. They run only when these variables are set, and otherwise pass without checking anything:
 
 | Variable | What |
 |---|---|
-| `RFCPS_IMAGE` | a codeplug image read from a radio (`rfcps --read PORT out.bin`, or RadioFoundry's `tools/cps_fast.py read --regions radio`) |
+| `RFCPS_IMAGE` | a codeplug image read from a radio (`tools/cps_fast.py read`, `--regions radio`) |
 | `RFCPS_GOLDEN` | the web editor's decode of it, as JSON (`golden.mjs`, a small Node script over `model.js decode()`) |
 | `RFCPS_EDITED_JS` | the web editor's encode of a fixed set of edits to the same image (`edit_js.mjs`) |
 | `RFCPS_KV_DIR` | the web editor's settings-area sectors for fixed key edits, with the radio-merge case (`edit_kv.mjs`, a small Node script over `kv.js` `putKeys` and `areaForWrite`) |
@@ -68,8 +64,10 @@ read an image from a radio here, use `rfcps --read PORT out.bin`.
 | `RFCPS_T3_DIR` | the web editor's whole images for fixed Tier III edits (`edit_t3.mjs`: a system with every field set, two channels and a key with a PSN, a channel on it, the system's own `0x0800` and `0x0900` records put in, edits, and the system deleted) |
 | `RFCPS_APRS_DIR` | the web editor's whole images for DTMF contact and APRS configuration edits (`edit_aprs.mjs`: created, edited, deleted, and an APRS record in the older layout), its CSV export of an image that holds them (`csv/`), and its qdmr export and import (`qdmr/`: `qdmr_aprs_js.mjs`, with a `rich.yaml` of awkward APRS systems) |
 | `RFCPS_IDDB_DIR` | the web editor's DMR ID database in format N for fixed and random record sets (`iddb_gold.mjs`: records, text length and room in, the bytes written, header, count, read-back and extent out; `iddb.js`) |
-| `RFCPS_RID_DIR` | the web editor's RadioID source on random `user.csv` text (`rid_gold.mjs`: `parseUsers` with header variants and bad rows, `select`, `regionsOf`, `format` over many templates; `sources/radioid.js`) |
 | `RFCPS_IDDBC_DIR` | the web editor's DMR ID database in format C and the conversions (`iddbc_gold.mjs`: steps on one image, namely writes in either format fresh or against what is there, converts and an erase, with room limits and page splits; whole image, each step's answer, read-back, extent and size estimate out) |
+| `RFCPS_RID_DIR` | the web editor's RadioID source on random `user.csv` text (`rid_gold.mjs`: `parseUsers` with header variants and bad rows, `select`, `regionsOf`, `format` over many templates, `addContacts`; `sources/radioid.js`) |
+| `RFCPS_IDDB_DIR` | the web editor's DMR ID database in format N for fixed and random record sets (`iddb_gold.mjs`: records, text length and room in, the bytes written, header, count, read-back and extent out; `iddb.js`) |
+| `RFCPS_RID_DIR` | the web editor's RadioID source on random `user.csv` text (`rid_gold.mjs`: `parseUsers` with header variants and bad rows, `select`, `regionsOf`, `format` over many templates; `sources/radioid.js`) |
 
 ```
 RFCPS_IMAGE=... RFCPS_GOLDEN=... RFCPS_EDITED_JS=... cargo test -p rfcps-core --test golden -- --nocapture

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2026 The RadioFoundry Authors
 // Copyright (c) 2026 insideTheFlux
 
 //! The look of RadioFoundry's web editor: its colors (an orange accent on warm grays, light and dark), rounded
