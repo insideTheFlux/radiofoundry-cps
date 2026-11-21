@@ -22,6 +22,8 @@ cargo run -p rfcps            # the editor
 cargo test --workspace        # the tests (no radio needed)
 ```
 
+Without a window: `rfcps --ports` lists serial ports, `rfcps --read PORT out.bin` saves the radio's codeplug to a file (read only), `rfcps --help` shows the rest.
+
 On Linux, to use a serial port add your user to the `dialout` group (`sudo usermod -aG dialout $USER`) and log in again.
 
 ## Packages

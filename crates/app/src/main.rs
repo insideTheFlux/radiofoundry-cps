@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod channels;
+mod cli;
 mod contacts;
 mod doc;
 mod exchange;
@@ -850,6 +851,10 @@ impl eframe::App for App {
 }
 
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = cli::run(&args) {
+        std::process::exit(code);
+    }
     // On Linux, use the X11 window system (through XWayland on a Wayland desktop): the desktop then draws the normal
     // title bar and buttons, where a Wayland window gets a plain fallback. RFCPS_WAYLAND=1 keeps Wayland.
     #[cfg(target_os = "linux")]
