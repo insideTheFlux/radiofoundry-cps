@@ -11,5 +11,5 @@ pub mod radio;
 pub mod write;
 
 pub use fast::{Block, Info, Status, Sums};
-pub use radio::{open, port_names, ports, LinkError, PortInfo, Radio};
+pub use radio::{open, port_names, ports, IddbAnswer, LinkError, PortInfo, Radio};
 pub use write::WriteReport;

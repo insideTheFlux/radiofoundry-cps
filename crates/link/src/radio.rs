@@ -187,6 +187,21 @@ impl<P: Read + Write> Radio<P> {
         Ok(self.features()?.iter().any(|f| f == "IDDB_COMPACT"))
     }
 
+    /// The radio's own lookup of a DMR ID in the ID database it holds (debuglink.md 3.23). ID 0 asks only about the
+    /// database. Read only.
+    pub fn iddb_lookup(&mut self, id: u32) -> Result<IddbAnswer> {
+        let d = self.request(0x1F, &id.to_le_bytes())?;
+        if d.len() < 6 {
+            return Err(LinkError::Protocol("IDDB reply too short".into()));
+        }
+        Ok(IddbAnswer {
+            format: d[0],
+            records: u32::from_le_bytes([d[1], d[2], d[3], d[4]]),
+            found: d[5] != 0,
+            text: String::from_utf8_lossy(&d[6..]).into_owned(),
+        })
+    }
+
     /// Asks the radio to echo some bytes; proves a RadioFoundry debug link is on the other end.
     pub fn ping(&mut self) -> Result<()> {
         let echo = self.request(0x01, b"rfcps")?;
@@ -196,6 +211,16 @@ impl<P: Read + Write> Radio<P> {
             Err(LinkError::Protocol("the echo differs".into()))
         }
     }
+}
+
+/// What the radio answers to a DMR ID lookup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IddbAnswer {
+    /// The header's letter (`N`, `n`, `C`); 0 for no database, or one this build does not read.
+    pub format: u8,
+    pub records: u32,
+    pub found: bool,
+    pub text: String,
 }
 
 /// A serial port, described for a chooser.

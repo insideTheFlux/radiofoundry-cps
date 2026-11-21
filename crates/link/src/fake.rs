@@ -103,6 +103,19 @@ impl FakeRadio {
                 r.extend_from_slice(format!("proto=1\nboard=FAKE\nfeatures={}\n", self.features).as_bytes());
                 self.reply(cmd, seq, r);
             }
+            (0x1F, _) if p.len() == 4 => {
+                // the radio's lookup in the database its image holds
+                let id = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
+                let h = rfcps_core::iddb::read_header(&self.image);
+                let mut r = vec![0, h.as_ref().map_or(0, |h| h.format)];
+                r.extend_from_slice(&h.as_ref().map_or(0, |h| h.count).to_le_bytes());
+                let hit = if id == 0 { None } else { rfcps_core::iddb::read(&self.image).into_iter().find(|x| x.id == id) };
+                r.push(u8::from(hit.is_some()));
+                if let Some(x) = hit {
+                    r.extend_from_slice(x.text.as_bytes());
+                }
+                self.reply(cmd, seq, r);
+            }
             (0x1C, Some(0)) => {
                 let (ver, ee, fl, end) =
                     self.info_layout

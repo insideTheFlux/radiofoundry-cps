@@ -128,3 +128,16 @@ fn a_compact_database_writes_and_reads_back_through_the_link() {
     let w = &r.port_mut().written_blocks;
     assert_eq!((w.first(), w.last()), (Some(&HEAD), Some(&HEAD)));
 }
+
+#[test]
+fn the_radios_own_lookup_finds_a_name_in_what_was_written() {
+    let mut r = radio();
+    let mut img = Image::blank();
+    iddb::write(&mut img, &records(300), iddb::Options { format: b'C', ..Default::default() }).unwrap();
+    r.write_iddb(&img, &mut |_, _| {}).unwrap();
+    let a = r.iddb_lookup(3_100_007).unwrap();
+    assert_eq!((a.format, a.records, a.found), (b'C', 300, true));
+    assert_eq!(a.text, "Call7 Name");
+    assert!(!r.iddb_lookup(9).unwrap().found);
+    assert_eq!(r.iddb_lookup(0).unwrap().records, 300);
+}
