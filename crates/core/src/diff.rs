@@ -78,6 +78,21 @@ pub fn changes(old: &Codeplug, new: &Codeplug) -> Vec<Change> {
     if g.0.boot_line1 != g.1.boot_line1 || g.0.boot_line2 != g.1.boot_line2 {
         gf.push("boot text");
     }
+    let (k0, k1) = (&g.0.keys, &g.1.keys);
+    if k0.ars_server != k1.ars_server {
+        gf.push("ARS server");
+    }
+    if k0.ip_gateway != k1.ip_gateway {
+        gf.push("IP gateway");
+    }
+    if (k0.call_end_tone, k0.tot_warn_tone, k0.battery_tone, k0.tx_deny_tone)
+        != (k1.call_end_tone, k1.tot_warn_tone, k1.battery_tone, k1.tx_deny_tone)
+    {
+        gf.push("tones");
+    }
+    if k0.sig != k1.sig {
+        gf.push("signaling tones");
+    }
     if !gf.is_empty() {
         out.push(Change {
             table: Table::General,
@@ -252,6 +267,17 @@ mod tests {
     fn identical_codeplugs_have_no_changes() {
         let (a, b) = two();
         assert!(changes(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn a_settings_area_key_is_a_general_change() {
+        let (a, mut b) = two();
+        b.general.keys.ars_server = Some(3_100_001);
+        b.general.keys.battery_tone = Some(false);
+        let ch = changes(&a, &b);
+        assert_eq!(ch.len(), 1);
+        assert_eq!(ch[0].table, Table::General);
+        assert_eq!(ch[0].detail, "ARS server, tones");
     }
 
     #[test]

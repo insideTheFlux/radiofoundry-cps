@@ -431,4 +431,35 @@ mod tests {
             (1, 1, 1, 0)
         );
     }
+
+    #[test]
+    fn the_keyed_settings_round_trip_and_an_unedited_codeplug_leaves_the_area_alone() {
+        use crate::kv::{self, Keys, SigRecord, KV_ADDR, KV_SIZE};
+        let img = Image::blank();
+        let mut cp = Codeplug::decode(&img);
+        // Unedited: the same bytes, the area still erased.
+        assert_eq!(cp.encode(&img).bytes(), img.bytes());
+        let mut tone = SigRecord { dmr: 2, fm: 1, ..SigRecord::default() };
+        tone.hz[0] = 1750;
+        tone.ms[0] = 300;
+        cp.general.keys = Keys {
+            ars_server: Some(3_100_001),
+            tot_warn_tone: Some(false),
+            sig: [None, Some(tone), None],
+            ..Keys::default()
+        };
+        let out = cp.encode(&img);
+        assert_eq!(Codeplug::decode(&out).general.keys, cp.general.keys);
+        // Only the settings sector differs from the image it started from.
+        let diff: Vec<usize> = (0..out.bytes().len()).filter(|&i| out.bytes()[i] != img.bytes()[i]).collect();
+        assert!(!diff.is_empty() && diff.iter().all(|&i| (KV_ADDR..KV_ADDR + KV_SIZE).contains(&i)));
+        // Encoding the decoded codeplug again changes nothing.
+        let again = Codeplug::decode(&out);
+        assert_eq!(again.encode(&out).bytes(), out.bytes());
+        // Taking a key away removes it and keeps the others.
+        let mut cp = again;
+        cp.general.keys.ars_server = None;
+        let k = kv::decode_keys(cp.encode(&out).bytes());
+        assert_eq!((k.ars_server, k.tot_warn_tone), (None, Some(false)));
+    }
 }

@@ -72,6 +72,22 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
             "The DMR ID is more than 24 bits.".into(),
         );
     }
+    // The settings area's keys (codeplug-settings.md 3): an absent key says nothing, so only a value is checked.
+    if !crate::kv::keys_valid(&g.keys) {
+        add(
+            err,
+            Table::General,
+            None,
+            "",
+            format!(
+                "A settings-area value is out of range: IDs go up to {}, signaling tones up to {} Hz in steps of {} Hz and {} ms.",
+                crate::kv::ID_MAX,
+                crate::kv::SIG_HZ_MAX,
+                crate::kv::SIG_HZ_UNIT,
+                crate::kv::SIG_MS_MAX
+            ),
+        );
+    }
     if g.radio_name.chars().count() > 8 {
         add(
             err,

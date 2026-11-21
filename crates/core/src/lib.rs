@@ -11,6 +11,7 @@ pub mod diff;
 pub mod fields;
 pub mod freqs;
 pub mod image;
+pub mod kv;
 pub mod model;
 pub mod problems;
 pub mod qdmr;

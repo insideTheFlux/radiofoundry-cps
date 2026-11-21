@@ -271,6 +271,8 @@ pub struct General {
     pub private_hang: u8,
     pub boot_line1: String,
     pub boot_line2: String,
+    /// The settings area's keys (codeplug-settings.md): `None` is an absent key, which leaves the radio's own value.
+    pub keys: crate::kv::Keys,
 }
 
 pub fn decode_general(b: &[u8]) -> General {
@@ -283,6 +285,7 @@ pub fn decode_general(b: &[u8]) -> General {
         private_hang: hang(g[0x19]),
         boot_line1: get_name(b, BOOT_TEXT, 16),
         boot_line2: get_name(b, BOOT_TEXT + 16, 16),
+        keys: crate::kv::decode_keys(b),
     }
 }
 
@@ -441,4 +444,7 @@ pub fn encode_general(s: &General, b: &mut [u8]) {
     if was.boot_line2 != s.boot_line2 {
         put_name(b, BOOT_TEXT + 16, 16, &s.boot_line2);
     }
+    // The settings area is touched only when a key changed, and never over an area of a newer version. (`put_keys`
+    // says so with false; the editor warns about such an area where it knows the image.)
+    crate::kv::put_keys(b, &s.keys);
 }

@@ -386,3 +386,54 @@ fn the_qdmr_yaml_matches_the_web_editor() {
     assert_eq!(again.channels.len(), cp.channels.len());
     assert_eq!(again.zones, cp.zones);
 }
+
+/// The settings area (codeplug-settings.md): the same edits with the web editor's `kv.js` and with this port give the
+/// same sector, byte for byte. `RFCPS_KV_DIR` holds the web editor's sectors (see `docs/testing.md`).
+#[test]
+fn the_settings_area_matches_the_web_editor() {
+    use rfcps_core::kv::{self, Keys, SigRecord, KV_ADDR, KV_SIZE};
+    let (Ok(img_path), Ok(dir)) = (std::env::var("RFCPS_IMAGE"), std::env::var("RFCPS_KV_DIR")) else {
+        eprintln!("RFCPS_IMAGE / RFCPS_KV_DIR not set: skipped");
+        return;
+    };
+    let read = |n: &str| std::fs::read(format!("{dir}/{n}")).unwrap();
+    let sector = |b: &[u8]| b[KV_ADDR..KV_ADDR + KV_SIZE].to_vec();
+    let raw = Image::from_bytes(&std::fs::read(img_path).unwrap()).bytes().to_vec();
+
+    let mut sig = SigRecord { dmr: 2, fm: 1, ..SigRecord::default() };
+    sig.hz[0] = 1000;
+    sig.ms[0] = 200;
+    sig.hz[6] = 3400;
+    sig.ms[6] = 900;
+
+    // 1: a set of edits on the image as read
+    let mut a = raw.clone();
+    let keys = Keys {
+        ars_server: Some(3_100_001),
+        ip_gateway: Some(4242),
+        call_end_tone: Some(false),
+        battery_tone: Some(true),
+        sig: [Some(sig), None, None],
+        ..Keys::default()
+    };
+    assert!(kv::put_keys(&mut a, &keys));
+    assert_eq!(sector(&a), read("kv1.bin"), "first edit");
+
+    // 2: a second edit on that: remove the gateway, set another tone
+    let mut b = a.clone();
+    let mut keys2 = kv::decode_keys(&b);
+    keys2.ip_gateway = None;
+    keys2.tot_warn_tone = Some(true);
+    assert!(kv::put_keys(&mut b, &keys2));
+    assert_eq!(sector(&b), read("kv2.bin"), "second edit");
+
+    // 3: the radio's menu changed key 2 and a tone since the file was read; the edit set the ARS server
+    let mut file = a.clone();
+    let mut k3 = kv::decode_keys(&file);
+    k3.ars_server = Some(77);
+    assert!(kv::put_keys(&mut file, &k3));
+    assert_eq!(sector(&file), read("file3_before.bin"));
+    let radio = read("radio3.bin");
+    kv::area_for_write(&mut file, &radio, &sector(&a)).unwrap();
+    assert_eq!(sector(&file), read("kv3.bin"), "area for a write");
+}
