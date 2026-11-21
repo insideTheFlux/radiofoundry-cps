@@ -39,6 +39,7 @@ fn table_name(t: Table) -> &'static str {
         Table::Zones => "Zone",
         Table::Contacts => "Contact",
         Table::RxLists => "RX group list",
+        Table::Systems => "System",
     }
 }
 

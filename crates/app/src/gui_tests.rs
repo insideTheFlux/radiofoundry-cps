@@ -346,6 +346,10 @@ use rfcps_core::{Codeplug, Image};
 /// An app with a plain FM channel 1 open and selected. The channel table's own cells have no accessible names yet
 /// (see the real-image test), so the accessibility check is off for these.
 fn harness_with_channel(tweak: impl FnOnce(&mut Codeplug)) -> H {
+    harness_with_channel_sized(tweak, 1400.0)
+}
+
+fn harness_with_channel_sized(tweak: impl FnOnce(&mut Codeplug), height: f32) -> H {
     let base = Image::blank();
     let mut cp = Codeplug::decode(&base);
     let mut c = Channel::new(1, 146_520_000, 146_520_000);
@@ -357,7 +361,7 @@ fn harness_with_channel(tweak: impl FnOnce(&mut Codeplug)) -> H {
     app.open_image(img.bytes(), "modes.bin".into());
     app.channel = Some(1);
     let mut h = Harness::builder()
-        .with_size(egui::vec2(1240.0, 1400.0))
+        .with_size(egui::vec2(1240.0, height))
         .with_accessibility_check(false)
         .build_eframe(move |cc| {
             theme::apply(&cc.egui_ctx);
@@ -419,7 +423,7 @@ fn a_channel_is_made_nxdn_and_its_fields_are_edited() {
 
 #[test]
 fn rx_only_on_a_channel_of_a_kind_is_the_tags_transmit_flag() {
-    let mut h = harness_with_channel(|cp| modes::set_kind(&mut cp.channels[0], modes::KIND_P25, rfcps_core::records::Mode::Dmr));
+    let mut h = harness_with_channel(|cp| modes::set_kind(&mut cp.channels[0], modes::KIND_P25, rfcps_core::records::Mode::Dmr, &[]));
     assert!(channel(&h).tagged.as_ref().unwrap().tx);
     // "RX Only" is the first checkbox of the form that is labelled so.
     h.get_by_role_and_label(Role::CheckBox, "RX Only").click();
@@ -431,7 +435,7 @@ fn rx_only_on_a_channel_of_a_kind_is_the_tags_transmit_flag() {
 
 #[test]
 fn going_back_to_fm_removes_the_kind() {
-    let mut h = harness_with_channel(|cp| modes::set_kind(&mut cp.channels[0], modes::KIND_NXDN, rfcps_core::records::Mode::Dmr));
+    let mut h = harness_with_channel(|cp| modes::set_kind(&mut cp.channels[0], modes::KIND_NXDN, rfcps_core::records::Mode::Dmr, &[]));
     assert_eq!(channel(&h).kind(), modes::KIND_NXDN);
     pick(&mut h, "Mode", "FM");
     let c = channel(&h);
@@ -444,16 +448,17 @@ fn going_back_to_fm_removes_the_kind() {
 fn a_channel_of_a_mode_this_editor_does_not_edit_is_shown_and_kept() {
     let h = harness_with_channel(|cp| {
         cp.channels[0].tagged = Some(Tagged {
-            kind: modes::KIND_P25_TRUNK,
+            kind: 9,
             system: 2,
             tx: false,
             base_own: false,
             fallback: Fallback::None,
+            no_fallback: false,
             params: Params::Unknown,
             raw: Vec::new(),
         });
     });
-    assert_eq!(channel(&h).kind(), modes::KIND_P25_TRUNK);
+    assert_eq!(channel(&h).kind(), 9);
     h.get_by_label_contains("this editor does not edit");
     // Nothing about it changed: encoding the open codeplug again leaves the image as it is.
     let doc = h.state().doc.as_ref().unwrap();
@@ -471,4 +476,124 @@ fn the_unit_ids_are_set_on_the_general_tab() {
     assert_eq!((ms.p25_unit_id, ms.nxdn_unit_id), (3_100_001, 0));
     retype(&mut h, "NXDN unit ID", "4242");
     assert_eq!(h.state().doc.as_ref().unwrap().cp.mode_settings.nxdn_unit_id, 4242);
+}
+
+// --- Systems: the Systems tab, and a channel on a system ---
+
+use rfcps_core::systems::{self as sys, EntryBody, SysEntry, System, SystemFields};
+
+fn harness_on_systems(tweak: impl FnOnce(&mut Codeplug)) -> H {
+    let mut h = harness_with_channel_sized(tweak, 2600.0);
+    click_prefix(&mut h, "Systems");
+    h
+}
+
+fn doc_systems(h: &H) -> &Vec<System> {
+    &h.state().doc.as_ref().unwrap().cp.systems
+}
+
+#[test]
+fn a_system_is_added_edited_and_deleted() {
+    let mut h = harness_on_systems(|_| {});
+    h.get_by_label_contains("No systems");
+    click(&mut h, "Add P25 trunked system");
+    assert_eq!(doc_systems(&h).len(), 1);
+    // A new system is listen only, with the first free number.
+    let s = &doc_systems(&h)[0];
+    assert_eq!((s.number, s.tx, s.name.as_str()), (1, false, "System 1"));
+
+    type_into(&mut h, "WACN", "BEE00");
+    type_into(&mut h, "System ID", "3AB");
+    retype(&mut h, "Hold on the voice channel (s)", "9");
+    match &doc_systems(&h)[0].fields {
+        SystemFields::P25Trunk(f) => assert_eq!((f.wacn, f.sysid, f.hold_s), (Some(0xBEE00), Some(0x3AB), 9)),
+        other => panic!("{other:?}"),
+    }
+    // The transmit side is a choice; "without registering" also sets the system's no-register option.
+    pick(&mut h, "Transmit side", "Transmit without registering");
+    let s = &doc_systems(&h)[0];
+    assert!(s.tx);
+    assert!(matches!(&s.fields, SystemFields::P25Trunk(f) if f.no_reg));
+    pick(&mut h, "Transmit side", "Listen only");
+    assert!(!doc_systems(&h)[0].tx);
+
+    click(&mut h, "Add site");
+    click(&mut h, "Add control channel");
+    click(&mut h, "Add plan row");
+    let e = &doc_systems(&h)[0].entries;
+    assert_eq!(e.len(), 3);
+    assert!(e.iter().any(|x| matches!(x.body, EntryBody::P25Site { .. })));
+    assert!(e.iter().any(|x| matches!(x.body, EntryBody::P25Control { .. }) && x.control));
+    assert!(e.iter().any(|x| matches!(x.body, EntryBody::P25Plan { .. })));
+
+    click(&mut h, "Delete system…");
+    h.get_by_label_contains("Delete this system?");
+    click(&mut h, "Cancel");
+    assert_eq!(doc_systems(&h).len(), 1);
+    click(&mut h, "Delete system…");
+    click(&mut h, "Yes, delete it");
+    assert!(doc_systems(&h).is_empty());
+}
+
+fn system_with_control() -> System {
+    let mut s = System::new(sys::SYSTEM_P25_TRUNK, "Test Net");
+    s.number = 1;
+    s.entries.push(SysEntry {
+        cls: 0,
+        group: 0,
+        control: true,
+        flags: 0,
+        body: EntryBody::P25Control { iden: 1, chan_no: 5, rx_hz: 851_012_500, tx_hz: 806_012_500 },
+        raw: Vec::new(),
+    });
+    s
+}
+
+#[test]
+fn a_channel_is_put_on_a_system_and_follows_its_control_channel() {
+    let mut h = harness_with_channel(|cp| cp.systems.push(system_with_control()));
+    pick(&mut h, "Mode", "P25T");
+    let c = channel(&h);
+    assert_eq!(c.kind(), modes::KIND_P25_TRUNK);
+    // On the first system, its record the control channel's frequencies and a receive-only stand-in.
+    assert_eq!(c.tagged.as_ref().unwrap().system, 0);
+    assert_eq!((c.rx_hz, c.tx_hz), (851_012_500, 806_012_500));
+    assert!(c.rx_only);
+    h.get_by_role_and_label(Role::ComboBox, "System");
+    click(&mut h, "Follow every group");
+    assert!(matches!(&channel(&h).tagged.as_ref().unwrap().params, Params::P25Trunk(p) if p.follow_all));
+}
+
+#[test]
+fn deleting_a_system_makes_its_channels_plain_and_receive_only() {
+    let mut h = harness_on_systems(|cp| {
+        cp.systems.push(system_with_control());
+        let systems = cp.systems.clone();
+        modes::set_kind(&mut cp.channels[0], modes::KIND_P25_TRUNK, rfcps_core::records::Mode::Dmr, &systems);
+    });
+    assert_eq!(channel(&h).kind(), modes::KIND_P25_TRUNK);
+    click(&mut h, "Delete system…");
+    h.get_by_label_contains("1 channel(s) on it");
+    click(&mut h, "Yes, delete it");
+    let c = channel(&h);
+    assert_eq!(c.kind(), 0);
+    assert!(c.rx_only, "its record held the system's frequencies, so it must not transmit");
+}
+
+#[test]
+fn save_image_asks_before_it_carries_a_secret_key() {
+    use rfcps_core::kv::{self, Entry};
+    let mut img = Image::blank();
+    let area = kv::encode_area(&[Entry { key: 0x0300, value: vec![1; 19] }], None).unwrap();
+    img.bytes_mut()[kv::KV_ADDR..kv::KV_ADDR + kv::KV_SIZE].copy_from_slice(&area);
+    let mut app = App::with_ports(Vec::new());
+    app.open_image(img.bytes(), "keys.bin".into());
+    let mut h = harness_with(app);
+    click(&mut h, "Save image…");
+    h.get_by_label("Save the secret keys too?");
+    h.get_by_label_contains("holds 1 secret key(s)");
+    h.get_by_label("Save without keys");
+    h.get_by_label("Include the keys");
+    click(&mut h, "Cancel");
+    assert!(h.state().confirm_keys.is_none());
 }

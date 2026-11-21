@@ -10,6 +10,7 @@ mod doc;
 mod exchange;
 mod general;
 mod lists;
+mod systems;
 mod theme;
 mod widgets;
 mod worker;
@@ -34,6 +35,7 @@ enum Tab {
     Zones,
     Contacts,
     Lists,
+    Systems,
     General,
 }
 
@@ -50,6 +52,8 @@ struct App {
     channel: Option<u16>,
     contact: Option<u16>,
     list: usize,
+    /// The selected system's number (the Systems tab).
+    system: Option<u16>,
     flow: writeflow::Flow,
     problems: Vec<Problem>,
     problems_key: (u64, u64),
@@ -58,6 +62,8 @@ struct App {
     notice: Option<(String, Vec<String>)>,
     /// Asking whether to throw away unsaved edits for a new codeplug.
     confirm_new: bool,
+    /// Asking whether a saved image may carry the codeplug's secret keys: how many it holds.
+    confirm_keys: Option<usize>,
     /// The green or red bar under the toolbar after a write; the x closes it.
     banner: Option<(bool, String)>,
 }
@@ -87,6 +93,7 @@ impl App {
             channel: None,
             contact: None,
             list: 0,
+            system: None,
             flow: writeflow::Flow::new(),
             problems: Vec::new(),
             problems_key: (u64::MAX, u64::MAX),
@@ -94,6 +101,7 @@ impl App {
             show_problems: true,
             notice: None,
             confirm_new: false,
+            confirm_keys: None,
             banner: None,
         }
     }
@@ -201,7 +209,18 @@ impl App {
         }
     }
 
-    fn save_dialog(&mut self) {
+    /// Save image: asks first when the codeplug holds secret keys (channel-modes.md 8), which a file leaves out unless
+    /// the user says so.
+    fn save_clicked(&mut self) {
+        let n = self.doc.as_ref().map_or(0, |d| rfcps_core::kv::count_secrets(d.encoded().bytes()));
+        if n > 0 {
+            self.confirm_keys = Some(n);
+        } else {
+            self.save_dialog(true);
+        }
+    }
+
+    fn save_dialog(&mut self, include_keys: bool) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Codeplug image", &["bin"])
             .set_file_name("codeplug.bin")
@@ -210,8 +229,16 @@ impl App {
             return;
         };
         if let Some(d) = &mut self.doc {
-            let img = d.encoded();
+            let mut img = d.encoded();
+            let secrets = rfcps_core::kv::count_secrets(img.bytes());
+            if !include_keys {
+                rfcps_core::kv::without_secrets(img.bytes_mut());
+            }
             match std::fs::write(&path, img.bytes()) {
+                Ok(()) if secrets > 0 && !include_keys => {
+                    // The file differs from the codeplug: it is not marked saved.
+                    self.status = format!("Saved {} without its {secrets} secret key(s).", path.display());
+                }
                 Ok(()) => {
                     d.mark_file_saved();
                     self.status = format!("Saved {}.", path.display());
@@ -436,7 +463,7 @@ impl App {
                 .add_enabled(self.doc.is_some(), egui::Button::new("Save image…"))
                 .clicked()
             {
-                self.save_dialog();
+                self.save_clicked();
             }
             ui.separator();
             ui.menu_button("Import", |ui| {
@@ -555,6 +582,7 @@ impl eframe::App for App {
             let key = (self.doc_serial, d.generation);
             if key != self.problems_key {
                 self.problems = problems::validate(&d.cp, None);
+                self.problems.extend(problems::area_problems(&d.cp, &d.base));
                 self.problems_key = key;
             }
         } else {
@@ -581,6 +609,37 @@ impl eframe::App for App {
             });
             if close || m.should_close() {
                 self.notice = None;
+            }
+        }
+        if let Some(n) = self.confirm_keys {
+            let (mut without, mut with, mut cancel) = (false, false, false);
+            let m = egui::Modal::new(egui::Id::unique("confirm_keys")).show(ui.ctx(), |ui| {
+                ui.set_width(480.0);
+                ui.heading("Save the secret keys too?");
+                ui.add_space(6.0);
+                ui.label(format!(
+                    "This codeplug holds {n} secret key(s). A saved file can be copied or shared, so by default it leaves them out."
+                ));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add(theme::primary(ui, "Save without keys", 15.0)).clicked() {
+                        without = true;
+                    }
+                    if ui.button("Include the keys").clicked() {
+                        with = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+            if without || with || cancel || m.should_close() {
+                self.confirm_keys = None;
+            }
+            if without {
+                self.save_dialog(false);
+            } else if with {
+                self.save_dialog(true);
             }
         }
         if self.confirm_new {
@@ -798,6 +857,10 @@ impl eframe::App for App {
                         self.contact = n;
                     }
                     Table::General => self.tab = Tab::General,
+                    Table::Systems => {
+                        self.tab = Tab::Systems;
+                        self.system = n;
+                    }
                     Table::RxLists => {
                         self.tab = Tab::Lists;
                         self.list = self
@@ -837,6 +900,11 @@ impl eframe::App for App {
                     Tab::Lists,
                     format!("RX Group Lists  {}", cp.rx_lists.len()),
                 );
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::Systems,
+                    format!("Systems  {}", cp.systems.len()),
+                );
                 ui.selectable_value(&mut self.tab, Tab::General, "General");
             });
             ui.separator();
@@ -846,6 +914,7 @@ impl eframe::App for App {
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
                 Tab::Contacts => contacts::show(ui, &mut doc.cp, &mut self.contact),
                 Tab::Lists => lists::show(ui, &mut doc.cp, &mut self.list),
+                Tab::Systems => systems::show(ui, &mut doc.cp, &mut self.system),
                 Tab::General => {
                     let newer = rfcps_core::kv::decode_area(doc.base.bytes()).state
                         == rfcps_core::kv::AreaState::Newer;
@@ -920,5 +989,6 @@ fn problem_table(t: Table) -> &'static str {
         Table::Zones => "Zone",
         Table::Contacts => "Contact",
         Table::RxLists => "RX group list",
+        Table::Systems => "System",
     }
 }

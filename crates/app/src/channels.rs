@@ -11,6 +11,7 @@ use egui_extras::{Column, TableBuilder};
 use rfcps_core::fields::parse_tone;
 use rfcps_core::freqs::{listen_band, set_rx, set_tx, ListenBand};
 use rfcps_core::modes::{self, Params};
+use rfcps_core::systems::System;
 use rfcps_core::records::{Channel, Mode, MAX_CHANNELS};
 use rfcps_core::Codeplug;
 
@@ -182,7 +183,7 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                             }
                         });
                         row.col(|ui| {
-                            hit |= mode_combo(ui, c, ("mode", number)).clicked();
+                            hit |= mode_combo(ui, c, &cp.systems, ("mode", number)).clicked();
                         });
                         row.col(|ui| {
                             hit |= power_combo(ui, c, ("power", number)).clicked();
@@ -219,7 +220,7 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
 
 /// The mode as the radio shows it: an FM channel in the air band is received in AM (the web editor says the same). A
 /// channel of a kind (P25, NXDN, ...) shows the kind; choosing a mode makes the channel that mode.
-fn mode_combo(ui: &mut Ui, c: &mut Channel, salt: (&str, u16)) -> egui::Response {
+fn mode_combo(ui: &mut Ui, c: &mut Channel, systems: &[System], salt: (&str, u16)) -> egui::Response {
     let band = if c.mode == Mode::Fm && c.tagged.is_none() {
         listen_band(c.rx_hz)
     } else {
@@ -238,14 +239,14 @@ fn mode_combo(ui: &mut Ui, c: &mut Channel, salt: (&str, u16)) -> egui::Response
         .width(58.0)
         .show_ui(ui, |ui| {
             if ui.selectable_label(kind == 0 && c.mode == Mode::Fm, "FM").clicked() {
-                modes::set_kind(c, 0, Mode::Fm);
+                modes::set_kind(c, 0, Mode::Fm, systems);
             }
             if ui.selectable_label(kind == 0 && c.mode == Mode::Dmr, "DMR").clicked() {
-                modes::set_kind(c, 0, Mode::Dmr);
+                modes::set_kind(c, 0, Mode::Dmr, systems);
             }
             for k in modes::EDITABLE_KINDS {
                 if ui.selectable_label(kind == k, modes::kind_name(k)).clicked() {
-                    modes::set_kind(c, k, Mode::Dmr);
+                    modes::set_kind(c, k, Mode::Dmr, systems);
                 }
             }
         })
@@ -340,13 +341,15 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             name_edit(ui, &mut c.name, 16, 200.0);
             ui.end_row();
             let l = ui.label("Mode");
-            mode_combo(ui, c, ("dmode", number)).labelled_by(l.id);
+            mode_combo(ui, c, &cp.systems, ("dmode", number)).labelled_by(l.id);
             ui.end_row();
             ui.label("Power");
             power_combo(ui, c, ("dpower", number));
             ui.end_row();
             ui.label("RX MHz");
-            let (_, v) = freq_edit(ui, egui::Id::unique(("d_rx", number)), c.rx_hz, true);
+            // A channel of a kind that runs on a system takes its system's control channel's frequencies.
+            let own = c.tagged.as_ref().is_none_or(|t| modes::own_freqs(t.kind));
+            let (_, v) = freq_edit(ui, egui::Id::unique(("d_rx", number)), c.rx_hz, own);
             if let Some(v) = v {
                 set_rx(c, v);
             }
@@ -356,7 +359,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 ui,
                 egui::Id::unique(("d_tx", number)),
                 c.tx_hz,
-                listen.is_none(),
+                listen.is_none() && own,
             );
             if let Some(v) = v {
                 set_tx(c, v);
@@ -446,7 +449,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
         });
 
     if c.tagged.is_some() {
-        mode_group(ui, c, choices);
+        mode_group(ui, c, &cp.systems, choices);
     } else if c.mode == Mode::Fm {
         group(ui, "FM");
         egui::Grid::new(("fm", number))
@@ -622,7 +625,7 @@ fn unit_field(ui: &mut Ui, c: &mut Channel, number: u16) -> egui::Response {
 
 /// The section of a channel of a kind: P25 and NXDN conventional (p25-codeplug.md 2, nxdn-codeplug.md 2); any other
 /// kind is kept as it is.
-fn mode_group(ui: &mut Ui, c: &mut Channel, choices: &Choices) {
+fn mode_group(ui: &mut Ui, c: &mut Channel, systems: &[System], choices: &Choices) {
     let number = c.number;
     let muted = theme::palette(ui).muted;
     let Some(kind) = c.tagged.as_ref().map(|t| t.kind) else { return };
@@ -696,6 +699,72 @@ fn mode_group(ui: &mut Ui, c: &mut Channel, choices: &Choices) {
             );
             if let Some(t) = &mut c.tagged {
                 t.params = Params::Nxdn(p);
+            }
+        }
+        Some(Params::P25Trunk(mut p)) => {
+            group(ui, "P25 trunked");
+            let mut system = c.tagged.as_ref().map_or(0xFF, |t| t.system);
+            let mut no_fallback = c.tagged.as_ref().is_some_and(|t| t.no_fallback);
+            egui::Grid::new(("p25t", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+                let l = ui.label("System");
+                let shown = systems
+                    .iter()
+                    .find(|s| system != 0xFF && s.number == u16::from(system) + 1)
+                    .map_or_else(
+                        || if system == 0xFF { "none".to_string() } else { format!("#{} (missing)", u16::from(system) + 1) },
+                        |s| format!("{}  {}", s.number, s.name),
+                    );
+                egui::ComboBox::from_id_salt(("p25tsys", number))
+                    .selected_text(shown)
+                    .width(220.0)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut system, 0xFF, "none");
+                        for s in systems.iter().filter(|s| s.type_id == rfcps_core::systems::SYSTEM_P25_TRUNK) {
+                            ui.selectable_value(&mut system, (s.number - 1) as u8, format!("{}  {}", s.number, s.name));
+                        }
+                    })
+                    .response
+                    .labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("Follow every group");
+                ui.checkbox(&mut p.follow_all, "").labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("TX Contact (talk group)");
+                contact_combo(ui, c, &choices.contacts, ("p25tcontact", number)).labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("RX Group List");
+                let shown = if c.rx_list == 0 {
+                    "none".to_string()
+                } else {
+                    choices.lists.iter().find(|(n, _)| *n == c.rx_list).map_or(format!("#{}", c.rx_list), |(_, n)| n.clone())
+                };
+                egui::ComboBox::from_id_salt(("p25tlist", number))
+                    .selected_text(shown)
+                    .width(160.0)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut c.rx_list, 0, "none");
+                        for (n, name) in &choices.lists {
+                            ui.selectable_value(&mut c.rx_list, *n, name);
+                        }
+                    })
+                    .response
+                    .labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("No fallback on this channel");
+                ui.checkbox(&mut no_fallback, "").labelled_by(l.id);
+                ui.end_row();
+            });
+            ui.label(
+                RichText::new("The channel's frequencies are the system's first control channel's. It transmits only when its RX Only is off and the system allows it.")
+                    .size(13.0)
+                    .color(muted),
+            );
+            if let Some(t) = &mut c.tagged {
+                t.params = Params::P25Trunk(p);
+                t.system = system;
+                t.no_fallback = no_fallback;
             }
         }
         _ => {

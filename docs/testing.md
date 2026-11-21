@@ -31,6 +31,12 @@ mode this editor doesn't edit; the link tests write a tagged channel (its record
 tag with its channel and keep the radio's tags when a file without an area is written; the golden test compares whole
 images with the web editor's.
 
+The Systems tab is covered by GUI tests (add a system, edit its identity and transmit side, add a site, a control
+channel and a plan row, delete it with its channels going plain and receive only; a channel put on a system takes its
+control channel's frequencies), problems tests (a full or newer settings area, a site twice, no control channel, a
+secret needed but missing) and a link test that writes a system and a channel on it to the software radio. Save image
+asks before it carries a secret key (a GUI test; the file dialog itself is not driven).
+
 Not covered: native file dialogs, the serial write itself (the software-radio tests in `rfcps-link` and the hand test
 on a radio cover it), and pixel snapshots (`egui_kittest`'s `snapshot` feature, not enabled).
 
@@ -46,6 +52,7 @@ radio image. They run only when these variables are set, and otherwise pass with
 | `RFCPS_EDITED_JS` | the web editor's encode of a fixed set of edits to the same image (`edit_js.mjs`) |
 | `RFCPS_KV_DIR` | the web editor's settings-area sectors for fixed key edits, with the radio-merge case (`edit_kv.mjs`, a small Node script over `kv.js` `putKeys` and `areaForWrite`) |
 | `RFCPS_MODES_DIR` | the web editor's whole images for fixed channel-mode edits (`edit_modes.mjs`: `setKind` to P25 and NXDN with parameters and unit IDs, a rename, a delete, back to plain; `model.js` `encode()`) |
+| `RFCPS_SYS_DIR` | the web editor's whole images for fixed system edits (`edit_systems.mjs`: `newSystem` for a P25 trunked system with a site, a control channel and a plan row, a channel put on it, a rename and a second control channel, and the system deleted; `model.js` `encode()` and `remove()`) |
 
 ```
 RFCPS_IMAGE=... RFCPS_GOLDEN=... RFCPS_EDITED_JS=... cargo test -p rfcps-core --test golden -- --nocapture
