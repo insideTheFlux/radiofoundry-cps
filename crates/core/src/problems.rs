@@ -9,7 +9,8 @@
 use crate::fields::parse_tone;
 use crate::freqs::{is_weather, listen_band, ListenBand};
 use crate::model::Codeplug;
-use crate::modes::{Params, NAC_ANY, NAC_REPEAT_ANY, NXDN_UNIT_MAX, P25_UNIT_MAX, P25_UNIT_WARN};
+use crate::modes::{Fallback, Params, NAC_ANY, NAC_REPEAT_ANY, NXDN_UNIT_MAX, P25_UNIT_MAX, P25_UNIT_WARN};
+use crate::systems::{self, EntryBody, SystemFields};
 use crate::records::{CallType, Mode, MAX_CHANNELS, MAX_CONTACTS, MAX_RX_LISTS, MAX_ZONES};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +26,8 @@ pub enum Table {
     Zones,
     Contacts,
     RxLists,
+    /// A system of a trunked mode (channel-modes.md 7).
+    Systems,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -323,10 +326,113 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                     add(warn, Table::Channels, n, name, format!("The channel's ID is above {NXDN_UNIT_MAX}: the radio's NXDN unit ID is used."));
                 }
             }
+            Params::P25Trunk(_) => {
+                if target.is_some_and(|k| k.call_type == CallType::Group && k.id > 0xFFFF) {
+                    add(warn, Table::Channels, n, name, "The talk group is above 65535: the channel calls talk group 1.".into());
+                }
+            }
             Params::Unknown => {
                 if !(1..=4).contains(&t.kind) {
                     add(warn, Table::Channels, n, name, format!("The channel is of a mode this editor does not know (kind {}); it is kept as it is.", t.kind));
                 }
+            }
+        }
+    }
+    // A channel of a kind that runs on a system: the system it names, and its fallback.
+    for c in &cp.channels {
+        let Some(t) = &c.tagged else { continue };
+        let (n, name) = (Some(c.number), c.name.as_str());
+        let want = match t.kind {
+            crate::modes::KIND_P25_TRUNK => Some(systems::SYSTEM_P25_TRUNK),
+            crate::modes::KIND_T3 => Some(1),
+            _ => None,
+        };
+        if let Some(want) = want {
+            if t.system == 0xFF {
+                add(err, Table::Channels, n, name, "The channel names no system.".into());
+            } else {
+                match cp.systems.iter().find(|s| s.number == u16::from(t.system) + 1) {
+                    None => add(warn, Table::Channels, n, name, format!("The system the channel names (number {}) is not there.", u16::from(t.system) + 1)),
+                    Some(s) if s.type_id != want => add(err, Table::Channels, n, name, "The channel's system is of another type.".into()),
+                    _ => {}
+                }
+            }
+        }
+        match &t.fallback {
+            Fallback::Stale(k) => add(warn, Table::Channels, n, name, format!("The fallback channel {k} is gone or renamed: the system's fallback is used.")),
+            Fallback::Channel(k) if cp.channel(*k).is_some_and(|f| f.tagged.is_some()) => {
+                add(warn, Table::Channels, n, name, "The fallback channel is itself of a mode; use a plain channel.".into())
+            }
+            _ => {}
+        }
+    }
+    // Systems (channel-modes.md 7, p25-codeplug.md 3).
+    if cp.systems.len() > systems::MAX_SYSTEMS {
+        add(err, Table::Systems, None, "", format!("{} systems; the most is {}.", cp.systems.len(), systems::MAX_SYSTEMS));
+    }
+    let n_entries: usize = cp.systems.iter().map(|s| s.entries.len()).sum();
+    if n_entries > systems::MAX_ENTRIES {
+        add(err, Table::Systems, None, "", format!("{n_entries} system entries; the most is {}.", systems::MAX_ENTRIES));
+    }
+    let mut ids: Vec<(String, &str)> = Vec::new();
+    for s in &cp.systems {
+        let (n, name) = (Some(s.number), s.name.as_str());
+        if !systems::type_known(s.type_id) {
+            add(warn, Table::Systems, n, name, format!("A system of a type this editor does not know ({}); it is kept as it is.", s.type_id));
+            continue;
+        }
+        if s.name.is_empty() {
+            add(err, Table::Systems, n, name, "The system has no name.".into());
+        }
+        if s.name.chars().count() > NAME_MAX {
+            add(err, Table::Systems, n, name, "The system name is longer than 16 characters.".into());
+        }
+        if let SystemFields::P25Trunk(_) = &s.fields {
+            let sites: Vec<u8> = s.entries.iter().filter(|e| e.cls == 1).map(|e| e.group).collect();
+            let mut dedup = sites.clone();
+            dedup.sort_unstable();
+            dedup.dedup();
+            if dedup.len() != sites.len() {
+                add(err, Table::Systems, n, name, "Two sites have the same number.".into());
+            }
+            let idens: Vec<u8> = s.entries.iter().filter(|e| e.cls == 2).map(|e| e.group).collect();
+            let mut d2 = idens.clone();
+            d2.sort_unstable();
+            d2.dedup();
+            if d2.len() != idens.len() {
+                add(err, Table::Systems, n, name, "Two plan rows have the same identifier.".into());
+            }
+            for e in s.entries.iter().filter(|e| e.cls == 0 && e.control) {
+                if !sites.is_empty() && !sites.contains(&e.group) {
+                    add(warn, Table::Systems, n, name, format!("A control channel names site {}, which is not in the list.", e.group));
+                }
+            }
+            if !s.entries.iter().any(|e| e.cls == 0 && e.control) {
+                add(warn, Table::Systems, n, name, "The system has no control channel.".into());
+            }
+            for e in &s.entries {
+                if let EntryBody::P25Control { rx_hz, .. } = &e.body {
+                    if *rx_hz == 0 && e.control {
+                        add(warn, Table::Systems, n, name, "A control channel has no frequency.".into());
+                    }
+                }
+            }
+        }
+        if s.needs_key && s.secret.is_none() {
+            add(warn, Table::Systems, n, name, "The system needs its secret but has none.".into());
+        }
+        match &s.fallback {
+            Fallback::Stale(k) => add(warn, Table::Systems, n, name, format!("The fallback channel {k} is gone or renamed.")),
+            Fallback::Channel(k) if cp.channel(*k).is_some_and(|f| f.tagged.is_some()) => {
+                add(warn, Table::Systems, n, name, "The fallback channel is itself of a mode; use a plain channel.".into())
+            }
+            _ => {}
+        }
+        if let Some(id) = s.identity() {
+            if let Some((_, other)) = ids.iter().find(|(i, _)| *i == id) {
+                add(warn, Table::Systems, n, name, format!("The same system as \"{other}\" (the same identity)."));
+            } else {
+                ids.push((id, name));
             }
         }
     }
@@ -449,6 +555,38 @@ fn band_name(b: ListenBand) -> &'static str {
         ListenBand::Air => "air band",
         ListenBand::Broadcast => "broadcast FM band",
     }
+}
+
+/// Problems of the settings area (channel-modes.md 8): the radio's area is of a version this editor doesn't know, so
+/// modes and systems set here are not written, or what is to be written is more than the 4 KB area holds.
+pub fn area_problems(cp: &Codeplug, base: &crate::Image) -> Vec<Problem> {
+    use crate::kv::{self, AreaState};
+    let mut out = Vec::new();
+    let any = !cp.systems.is_empty()
+        || cp.channels.iter().any(|c| c.tagged.is_some())
+        || cp.mode_settings != crate::modes::ModeSettings::default()
+        || cp.general.keys != kv::Keys::default();
+    if !any {
+        return out;
+    }
+    if kv::decode_area(base.bytes()).state == AreaState::Newer {
+        out.push(Problem {
+            level: Level::Warning,
+            table: Table::General,
+            number: None,
+            item: String::new(),
+            message: "The settings area is from a newer version of RadioFoundry: modes, systems and keys set here are not written.".into(),
+        });
+    } else if !cp.settings_area_fits(base) {
+        out.push(Problem {
+            level: Level::Error,
+            table: Table::Systems,
+            number: None,
+            item: String::new(),
+            message: "The settings area is full (4 KB): what the modes, systems and keys need does not fit. Remove some.".into(),
+        });
+    }
+    out
 }
 
 pub fn error_count(problems: &[Problem]) -> usize {
@@ -586,10 +724,10 @@ mod tests {
         use crate::modes::{self, NxdnConv, P25Conv, Params};
         let mut c = cp();
         let mut a = chan(1, "P25 A", 146_520_000);
-        modes::set_kind(&mut a, modes::KIND_P25, Mode::Dmr);
+        modes::set_kind(&mut a, modes::KIND_P25, Mode::Dmr, &[]);
         a.tagged.as_mut().unwrap().params = Params::P25(P25Conv { squelch: 0, rx_nac: 0xF7F, tx_nac: 0xF7E });
         let mut b = chan(2, "NXDN B", 146_540_000);
-        modes::set_kind(&mut b, modes::KIND_NXDN, Mode::Dmr);
+        modes::set_kind(&mut b, modes::KIND_NXDN, Mode::Dmr, &[]);
         b.tagged.as_mut().unwrap().params = Params::Nxdn(NxdnConv::default());
         b.dmr_id = 70_000;
         c.channels = vec![a, b];
@@ -604,8 +742,69 @@ mod tests {
         // A good one has none of them.
         let mut ok = cp();
         let mut a = chan(1, "P25 A", 146_520_000);
-        modes::set_kind(&mut a, modes::KIND_P25, Mode::Dmr);
+        modes::set_kind(&mut a, modes::KIND_P25, Mode::Dmr, &[]);
         ok.channels = vec![a];
         assert!(validate(&ok, None).iter().all(|x| !x.message.contains("NAC") && !x.message.contains("unit ID")));
+    }
+
+    #[test]
+    fn a_full_or_newer_settings_area_is_reported() {
+        use crate::systems::{EntryBody, SysEntry, System, SYSTEM_P25_TRUNK};
+        let base = crate::Image::blank();
+        let mut c = Codeplug::decode(&base);
+        assert!(area_problems(&c, &base).is_empty(), "nothing in the area: nothing to say");
+        // A few systems fit.
+        for i in 0..3u16 {
+            let mut s = System::new(SYSTEM_P25_TRUNK, &format!("Sys {i}"));
+            s.number = i + 1;
+            c.systems.push(s);
+        }
+        assert!(c.settings_area_fits(&base));
+        assert!(area_problems(&c, &base).is_empty());
+        // Far too many entries do not.
+        for s in &mut c.systems {
+            for k in 0..100u8 {
+                s.entries.push(SysEntry {
+                    cls: 0,
+                    group: 0,
+                    control: k == 0,
+                    flags: 0,
+                    body: EntryBody::P25Control { iden: 1, chan_no: u16::from(k), rx_hz: 851_000_000 + u32::from(k), tx_hz: 0 },
+                    raw: Vec::new(),
+                });
+            }
+        }
+        assert!(!c.settings_area_fits(&base));
+        let p = area_problems(&c, &base);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].level, Level::Error);
+        // An area of a newer version is a warning, and never counts as full.
+        let mut newer = crate::Image::blank();
+        newer.bytes_mut()[crate::kv::KV_ADDR..crate::kv::KV_ADDR + 4].copy_from_slice(b"RFKV");
+        newer.bytes_mut()[crate::kv::KV_ADDR + 4] = 2;
+        let p = area_problems(&c, &newer);
+        assert_eq!((p.len(), p[0].level), (1, Level::Warning));
+    }
+
+    #[test]
+    fn system_problems() {
+        use crate::systems::{EntryBody, SysEntry, System, SYSTEM_P25_TRUNK};
+        let mut c = cp();
+        let mut a = System::new(SYSTEM_P25_TRUNK, "Net A");
+        a.number = 1;
+        a.needs_key = true; // but no secret
+        let site = |g| SysEntry { cls: 1, group: g, control: false, flags: 0, body: EntryBody::P25Site { rfss: None, site: None }, raw: Vec::new() };
+        a.entries = vec![site(3), site(3)]; // the same site twice, and no control channel
+        let mut b = System::new(SYSTEM_P25_TRUNK, "Net B");
+        b.number = 2;
+        b.name = String::new();
+        c.systems = vec![a, b];
+        let m: Vec<String> = validate(&c, None).into_iter().map(|p| p.message).collect();
+        assert!(m.iter().any(|x| x.contains("Two sites have the same number")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("no control channel")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("needs its secret")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("has no name")), "{m:?}");
+        // The same identity (both any) is the same system.
+        assert!(m.iter().any(|x| x.contains("same identity")), "{m:?}");
     }
 }

@@ -381,6 +381,38 @@ fn put_area(bytes: &mut [u8], entries: &[Entry]) -> bool {
     true
 }
 
+/// The key families that hold secrets (channel-modes.md 8): system secrets (`0x0300`-`0x03FF`) and traffic keys
+/// (`0x1900`-`0x1CFF`).
+const SECRET_FAMILIES: [(u16, u16); 2] = [(0x0300, 0x100), (0x1900, 0x400)];
+
+/// Whether a key holds a secret.
+pub fn is_secret(key: u16) -> bool {
+    SECRET_FAMILIES.iter().any(|&(base, n)| (base..base + n).contains(&key))
+}
+
+/// How many secrets an image's settings area holds.
+pub fn count_secrets(bytes: &[u8]) -> usize {
+    let area = decode_area(bytes);
+    if area.state != AreaState::Valid {
+        return 0;
+    }
+    dedupe(&area.entries).iter().filter(|e| is_secret(e.key)).count()
+}
+
+/// An image's bytes with every secret taken out of its settings area (a file saved without keys). An area that is
+/// not valid has none, and one of a newer version is left alone.
+pub fn without_secrets(bytes: &mut [u8]) {
+    let area = decode_area(bytes);
+    if area.state != AreaState::Valid {
+        return;
+    }
+    let entries = dedupe(&area.entries);
+    let kept: Vec<Entry> = entries.iter().filter(|e| !is_secret(e.key)).cloned().collect();
+    if kept.len() != entries.len() {
+        put_area(bytes, &kept);
+    }
+}
+
 /// The entries of an image's area as a writer starts from them: the first of each key, in order; none when the area
 /// isn't valid. `None` for an area of a newer version, which is never written.
 pub fn entries_for_write(bytes: &[u8]) -> Option<Vec<Entry>> {
@@ -771,5 +803,23 @@ mod tests {
         let want = sec(&file);
         area_for_write(&mut file, &radio[KV_ADDR..KV_ADDR + KV_SIZE], &sec(&base)).unwrap();
         assert_eq!(sec(&file), want);
+    }
+
+    #[test]
+    fn secrets_are_counted_and_taken_out_and_the_rest_stays() {
+        let mut b = with(&[e(0x0100, &[1]), e(0x0300, &[9; 19]), e(0x0001, &[5, 0, 0, 0]), e(0x1900, &[7; 6]), e(0x0400, &[2])]);
+        assert_eq!(count_secrets(&b), 2);
+        assert!(is_secret(0x03FF) && is_secret(0x1CFF) && !is_secret(0x0100) && !is_secret(0x1D00));
+        without_secrets(&mut b);
+        assert_eq!(count_secrets(&b), 0);
+        let keys: Vec<u16> = decode_area(&b).entries.iter().map(|x| x.key).collect();
+        assert_eq!(keys, vec![0x0100, 0x0001, 0x0400]);
+        // No secrets: nothing changes. Not a valid area: nothing changes.
+        let again = b.clone();
+        without_secrets(&mut b);
+        assert_eq!(b, again);
+        let mut erased = blank();
+        without_secrets(&mut erased);
+        assert_eq!(erased, blank());
     }
 }

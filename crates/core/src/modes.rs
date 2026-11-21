@@ -11,6 +11,7 @@
 
 use crate::fields::put_name;
 use crate::kv::{self, Entry};
+use crate::systems::{self, EntryBody, System};
 use crate::records::{channel_addr, Channel, Mode, CH_SIZE, MAX_CHANNELS};
 use std::collections::HashMap;
 
@@ -43,16 +44,16 @@ pub fn kind_name(kind: u8) -> &'static str {
 }
 
 /// Kinds a new channel can be made in this editor.
-pub const EDITABLE_KINDS: [u8; 2] = [KIND_P25, KIND_NXDN];
+pub const EDITABLE_KINDS: [u8; 3] = [KIND_P25, KIND_NXDN, KIND_P25_TRUNK];
 
 // --- Bytes ---
 
-fn u8_at(b: &[u8], o: usize) -> u8 {
+pub(crate) fn u8_at(b: &[u8], o: usize) -> u8 {
     b.get(o).copied().unwrap_or(0)
 }
 
 /// Little endian, 0 past a short record's end.
-fn u16_at(b: &[u8], o: usize) -> u16 {
+pub(crate) fn u16_at(b: &[u8], o: usize) -> u16 {
     if o + 2 <= b.len() {
         u16::from(b[o]) | (u16::from(b[o + 1]) << 8)
     } else {
@@ -60,7 +61,7 @@ fn u16_at(b: &[u8], o: usize) -> u16 {
     }
 }
 
-fn u32_at(b: &[u8], o: usize) -> u32 {
+pub(crate) fn u32_at(b: &[u8], o: usize) -> u32 {
     if o + 4 <= b.len() {
         u32::from(u16_at(b, o)) | (u32::from(u16_at(b, o + 2)) << 16)
     } else {
@@ -70,7 +71,7 @@ fn u32_at(b: &[u8], o: usize) -> u32 {
 
 /// `prev`'s bytes, at least `len` long (zeros added), or `len` zeros: a record written over the one stored keeps the
 /// bytes no field covers.
-fn grow(prev: Option<&[u8]>, len: usize) -> Vec<u8> {
+pub(crate) fn grow(prev: Option<&[u8]>, len: usize) -> Vec<u8> {
     let mut v = vec![0u8; len.max(prev.map_or(0, <[u8]>::len))];
     if let Some(p) = prev {
         v[..p.len()].copy_from_slice(p);
@@ -270,14 +271,24 @@ pub fn encode_nxdn(p: &NxdnConv, prev: Option<&[u8]>) -> Vec<u8> {
 pub enum Params {
     P25(P25Conv),
     Nxdn(NxdnConv),
+    /// A P25 trunked channel (p25-codeplug.md 4): follow every group of the system.
+    P25Trunk(P25TrunkChan),
     /// A kind this editor doesn't edit: its tag is kept as found.
     Unknown,
+}
+
+/// A P25 trunked channel's parameter block: bit 0, follow every group of the system; clear, the talk group and the RX
+/// group list only.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct P25TrunkChan {
+    pub follow_all: bool,
 }
 
 pub fn decode_params(kind: u8, block: &[u8]) -> Params {
     match kind {
         KIND_P25 => Params::P25(decode_p25(block)),
         KIND_NXDN => Params::Nxdn(decode_nxdn(block)),
+        KIND_P25_TRUNK => Params::P25Trunk(P25TrunkChan { follow_all: u8_at(block, 0) & 1 != 0 }),
         _ => Params::Unknown,
     }
 }
@@ -287,6 +298,11 @@ fn encode_params(p: &Params, prev: Option<&[u8]>) -> Option<Vec<u8>> {
     match p {
         Params::P25(x) => Some(encode_p25(x, prev)),
         Params::Nxdn(x) => Some(encode_nxdn(x, prev)),
+        Params::P25Trunk(x) => {
+            let mut v = grow(prev, 1);
+            v[0] = (v[0] & !1) | u8::from(x.follow_all);
+            Some(v)
+        }
         Params::Unknown => None,
     }
 }
@@ -296,6 +312,7 @@ pub fn new_params(kind: u8) -> Params {
     match kind {
         KIND_P25 => Params::P25(P25Conv::default()),
         KIND_NXDN => Params::Nxdn(NxdnConv::default()),
+        KIND_P25_TRUNK => Params::P25Trunk(P25TrunkChan::default()),
         _ => Params::Unknown,
     }
 }
@@ -323,10 +340,15 @@ pub struct Tagged {
     /// The record stands on its own (flag bit 1): it is a real FM or DMR channel too.
     pub base_own: bool,
     pub fallback: Fallback,
+    /// Kind bit 4 of a P25 trunked channel: no fallback on this channel.
+    pub no_fallback: bool,
     pub params: Params,
     /// The tag as read: the bytes no field covers come from here when the channel is written.
     pub raw: Vec<u8>,
 }
+
+/// The tag flag a P25 trunked channel names (the kind's own bit 4).
+pub const TAG_KIND_BIT4: u8 = 0x10;
 
 impl Channel {
     /// The channel's kind: 0 for a plain FM or DMR channel.
@@ -335,25 +357,46 @@ impl Channel {
     }
 }
 
+/// The system a channel names in its tag, if it is there.
+pub fn channel_system<'a>(c: &Channel, systems: &'a [System]) -> Option<&'a System> {
+    let t = c.tagged.as_ref()?;
+    (t.system != 0xFF).then(|| systems.iter().find(|s| s.number == u16::from(t.system) + 1)).flatten()
+}
+
 /// The record a channel of a kind keeps (2.3): DMR and receive only, unless the tag says the base stands on its own.
-pub fn stand_in(c: &mut Channel) {
-    if let Some(t) = &c.tagged {
-        if !t.base_own {
-            c.mode = Mode::Dmr;
-            c.rx_only = true;
+/// A kind without frequencies of its own takes its system's first control channel's.
+pub fn stand_in(c: &mut Channel, systems: &[System]) {
+    let Some(t) = &c.tagged else { return };
+    if t.base_own {
+        return;
+    }
+    c.mode = Mode::Dmr;
+    c.rx_only = true;
+    if !own_freqs(t.kind) {
+        let ctl = channel_system(c, systems).and_then(|s| {
+            s.entries.iter().find_map(|e| match &e.body {
+                EntryBody::P25Control { rx_hz, tx_hz, .. } if e.cls == 0 && e.control && *rx_hz != 0 => {
+                    Some((*rx_hz, *tx_hz))
+                }
+                _ => None,
+            })
+        });
+        if let Some((rx, tx)) = ctl {
+            c.rx_hz = u64::from(rx);
+            c.tx_hz = u64::from(if tx != 0 { tx } else { rx });
         }
     }
 }
 
 /// Whether a kind keeps its own frequencies in the record: the conventional kinds do; one that follows a system
 /// takes the system's control channel's.
-fn own_freqs(kind: u8) -> bool {
+pub fn own_freqs(kind: u8) -> bool {
     matches!(kind, KIND_P25 | KIND_NXDN)
 }
 
 /// Channel `c` made of `kind` (0: plain, in `mode`). Fields of the kind it had are dropped; transmit allowed carries
 /// over as the record's receive-only bit and back.
-pub fn set_kind(c: &mut Channel, kind: u8, mode: Mode) {
+pub fn set_kind(c: &mut Channel, kind: u8, mode: Mode, systems: &[System]) {
     if kind == 0 {
         if let Some(t) = &c.tagged {
             // A kind without frequencies of its own left its system's in the record: never a place to transmit.
@@ -367,17 +410,26 @@ pub fn set_kind(c: &mut Channel, kind: u8, mode: Mode) {
         return;
     }
     let tx = c.tagged.as_ref().map_or(!c.rx_only, |t| t.tx);
-    set_kind(c, 0, Mode::Dmr);
+    set_kind(c, 0, Mode::Dmr, systems);
+    // A kind that runs on a system starts on the first system of its type, if there is one.
+    let system = match kind {
+        KIND_P25_TRUNK => systems
+            .iter()
+            .find(|s| s.type_id == systems::SYSTEM_P25_TRUNK && (1..=255).contains(&s.number))
+            .map_or(0xFF, |s| (s.number - 1) as u8),
+        _ => 0xFF,
+    };
     c.tagged = Some(Tagged {
         kind,
-        system: 0xFF,
+        system,
         tx: matches!(kind, KIND_P25 | KIND_NXDN) && tx,
         base_own: false,
         fallback: Fallback::None,
+        no_fallback: false,
         params: new_params(kind),
         raw: Vec::new(),
     });
-    stand_in(c);
+    stand_in(c, systems);
 }
 
 // --- Decoding ---
@@ -401,6 +453,7 @@ pub fn decode_tags(channels: &mut [Channel], entries: &[Entry]) {
             tx: t.flags & TAG_TX != 0,
             base_own: t.flags & TAG_BASE_OWN != 0,
             fallback: Fallback::None,
+            no_fallback: t.kind == KIND_P25_TRUNK && t.flags & TAG_KIND_BIT4 != 0,
             params: decode_params(t.kind, &t.params),
             raw: raw.to_vec(),
         });
@@ -477,36 +530,47 @@ fn channel_used(b: &[u8], n: usize) -> bool {
     b[crate::records::bank_bitmap(bank) + (k >> 3)] & (1 << (k & 7)) != 0
 }
 
-fn set(out: &mut Vec<Entry>, key: u16, v: &[u8]) {
+pub(crate) fn set(out: &mut Vec<Entry>, key: u16, v: &[u8]) {
     if kv::get_value(out, key) != Some(v) {
         *out = kv::set_value(out, key, v);
     }
 }
 
-fn del(out: &mut Vec<Entry>, key: u16) {
+pub(crate) fn del(out: &mut Vec<Entry>, key: u16) {
     if kv::get_value(out, key).is_some() {
         *out = kv::delete_value(out, key);
     }
 }
 
-/// The area's entries with the channels' tags and the kinds' radio-wide records in place of those stored. Another tag
+/// What the writer takes from the codeplug: the channels, the kinds' radio-wide records, the systems (with their
+/// entries and secrets) and the entries of systems the model doesn't have, kept.
+pub struct ModesIn<'a> {
+    pub channels: &'a [Channel],
+    pub settings: &'a ModeSettings,
+    pub systems: &'a [System],
+    pub orphans: &'a [Vec<u8>],
+}
+
+/// The area's entries with the systems, the channels' tags and the kinds' radio-wide records in place of those stored. Another tag
 /// goes when no channel is at its number, or when its check is the name there or the name the image had there (2.4);
 /// else it is stale and kept. `base_names` gives the names the image the codeplug came from stores, by number.
 pub fn mode_entries(
-    channels: &[Channel],
-    settings: &ModeSettings,
+    m: &ModesIn,
     entries: &[Entry],
     base_names: impl FnOnce() -> HashMap<u16, String>,
 ) -> Vec<Entry> {
+    let (channels, settings) = (m.channels, m.settings);
     let mut out = entries.to_vec();
+    let names: HashMap<u16, &str> =
+        channels.iter().filter(|c| c.number != 0).map(|c| (c.number, c.name.as_str())).collect();
+    // Systems, their entries and secrets first, then the tags that name them.
+    out = systems::system_entries(m.systems, m.orphans, out, &names);
     let in_tags = |k: u16| (TAG_KEY..TAG_KEY + MAX_TAGS as u16).contains(&k);
     let tagged: Vec<(u16, &Channel)> = channels
         .iter()
         .filter(|c| c.tagged.is_some() && c.number != 0)
         .map(|c| (TAG_KEY + c.number - 1, c))
         .collect();
-    let names: HashMap<u16, &str> =
-        channels.iter().filter(|c| c.number != 0).map(|c| (c.number, c.name.as_str())).collect();
     let mut base_names = Some(base_names);
     let mut was: Option<HashMap<u16, String>> = None;
     for e in entries.iter().filter(|e| in_tags(e.key)) {
@@ -550,6 +614,9 @@ pub fn mode_entries(
             flags |= TAG_BASE_OWN;
         }
         let (fb_chan, fb_check) = fallback_out(&tg.fallback, &names, src.as_ref());
+        if tg.kind == KIND_P25_TRUNK {
+            flags = if tg.no_fallback { flags | TAG_KIND_BIT4 } else { flags & !TAG_KIND_BIT4 };
+        }
         if fb_chan != 0 {
             flags |= TAG_FALLBACK;
         }
@@ -591,21 +658,29 @@ pub fn mode_entries(
 }
 
 /// The channels' tags and the radio-wide records written into an image's settings area, only when they change it.
-/// An area of a newer version is never written.
+/// An area of a newer version is never written. False when what is to be written does not fit the area.
 pub fn encode_modes(
-    channels: &[Channel],
-    settings: &ModeSettings,
+    m: &ModesIn,
     b: &mut [u8],
     base_names: impl FnOnce() -> HashMap<u16, String>,
-) {
-    let Some(entries) = kv::entries_for_write(b) else { return };
-    let out = mode_entries(channels, settings, &entries, base_names);
-    kv::put_entries(b, &entries, &out);
+) -> bool {
+    let Some(entries) = kv::entries_for_write(b) else { return true };
+    let out = mode_entries(m, &entries, base_names);
+    kv::put_entries(b, &entries, &out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn me(
+        channels: &[Channel],
+        settings: &ModeSettings,
+        entries: &[Entry],
+        base: impl FnOnce() -> HashMap<u16, String>,
+    ) -> Vec<Entry> {
+        mode_entries(&ModesIn { channels, settings, systems: &[], orphans: &[] }, entries, base)
+    }
 
     #[test]
     fn the_name_check_matches_the_spec() {
@@ -682,7 +757,7 @@ mod tests {
 
     fn tagged_p25(n: u16, name: &str) -> Channel {
         let mut c = ch(n, name);
-        set_kind(&mut c, KIND_P25, Mode::Dmr);
+        set_kind(&mut c, KIND_P25, Mode::Dmr, &[]);
         c
     }
 
@@ -690,13 +765,13 @@ mod tests {
     fn making_a_channel_of_a_kind_leaves_a_safe_stand_in() {
         let mut c = ch(1, "One");
         assert!(!c.rx_only);
-        set_kind(&mut c, KIND_P25, Mode::Dmr);
+        set_kind(&mut c, KIND_P25, Mode::Dmr, &[]);
         assert_eq!(c.kind(), KIND_P25);
         // Transmit allowed carries over; the record is DMR and receive only.
         assert!(c.tagged.as_ref().unwrap().tx);
         assert!(c.rx_only && c.mode == Mode::Dmr);
         // Back to plain: transmit allowed returns as the receive-only bit.
-        set_kind(&mut c, 0, Mode::Fm);
+        set_kind(&mut c, 0, Mode::Fm, &[]);
         assert_eq!((c.kind(), c.mode, c.rx_only), (0, Mode::Fm, false));
     }
 
@@ -706,7 +781,7 @@ mod tests {
         if let Some(t) = &mut p.tagged {
             t.params = Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x123 });
         }
-        let entries = mode_entries(&[p.clone()], &ModeSettings::default(), &[], HashMap::new);
+        let entries = me(&[p.clone()], &ModeSettings::default(), &[], HashMap::new);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].key, TAG_KEY + 2);
         let mut back = vec![p.clone()];
@@ -720,11 +795,11 @@ mod tests {
     #[test]
     fn renaming_a_tagged_channel_makes_the_tag_follow_it() {
         let p = tagged_p25(3, "Old Name");
-        let e1 = mode_entries(std::slice::from_ref(&p), &ModeSettings::default(), &[], HashMap::new);
+        let e1 = me(std::slice::from_ref(&p), &ModeSettings::default(), &[], HashMap::new);
         let mut renamed = p.clone();
         renamed.name = "New Name".into();
         let names = HashMap::from([(3u16, "Old Name".to_string())]);
-        let e2 = mode_entries(&[renamed.clone()], &ModeSettings::default(), &e1, || names);
+        let e2 = me(&[renamed.clone()], &ModeSettings::default(), &e1, || names);
         let t = decode_tag(&e2[0].value).unwrap();
         assert_eq!(t.check, name_check("New Name"));
         assert_eq!(e2.len(), 1);
@@ -733,33 +808,33 @@ mod tests {
     #[test]
     fn a_plain_channel_at_a_tagged_number_removes_the_stale_tag() {
         let p = tagged_p25(3, "Was P25");
-        let e1 = mode_entries(std::slice::from_ref(&p), &ModeSettings::default(), &[], HashMap::new);
+        let e1 = me(std::slice::from_ref(&p), &ModeSettings::default(), &[], HashMap::new);
         // The channel is made plain: its tag's check is the old name's, so the tag goes.
         let mut plain = p.clone();
-        set_kind(&mut plain, 0, Mode::Fm);
+        set_kind(&mut plain, 0, Mode::Fm, &[]);
         let names = HashMap::from([(3u16, "Was P25".to_string())]);
-        let e2 = mode_entries(&[plain], &ModeSettings::default(), &e1, || names.clone());
+        let e2 = me(&[plain], &ModeSettings::default(), &e1, || names.clone());
         assert!(e2.is_empty());
         // The channel is deleted: no channel at the number, the tag goes.
-        let e3 = mode_entries(&[], &ModeSettings::default(), &e1, || names);
+        let e3 = me(&[], &ModeSettings::default(), &e1, || names);
         assert!(e3.is_empty());
     }
 
     #[test]
     fn a_tag_that_names_neither_the_old_nor_the_new_name_is_kept_as_stale() {
         let p = tagged_p25(3, "Was P25");
-        let e1 = mode_entries(std::slice::from_ref(&p), &ModeSettings::default(), &[], HashMap::new);
+        let e1 = me(std::slice::from_ref(&p), &ModeSettings::default(), &[], HashMap::new);
         // Another tool put a different plain channel at 3 and the image had that name: the tag is stale, kept.
         let other = ch(3, "Something Else");
         let names = HashMap::from([(3u16, "Something Else".to_string())]);
-        let e2 = mode_entries(&[other], &ModeSettings::default(), &e1, || names);
+        let e2 = me(&[other], &ModeSettings::default(), &e1, || names);
         assert_eq!(e2, e1);
     }
 
     #[test]
     fn a_tag_of_a_kind_this_editor_does_not_know_is_kept_whole() {
-        // A trunked channel (kind 3) with a system and bytes this editor doesn't know.
-        let t = Tag { kind: 3, system: 2, check: name_check("Trunk"), flags: TAG_TX | 0x10, fb_chan: 0, fb_check: 0, params: vec![1, 9, 9] };
+        // A channel of kind 9 (none this editor knows) with a system and bytes it can't read.
+        let t = Tag { kind: 9, system: 2, check: name_check("Trunk"), flags: TAG_TX | 0x10, fb_chan: 0, fb_check: 0, params: vec![1, 9, 9] };
         let raw = encode_tag(&t);
         let entries = vec![Entry { key: TAG_KEY + 4, value: raw.clone() }];
         let mut c = ch(5, "Trunk");
@@ -767,21 +842,43 @@ mod tests {
         c.rx_only = true;
         let mut chans = vec![c];
         decode_tags(&mut chans, &entries);
-        assert_eq!(chans[0].kind(), KIND_P25_TRUNK);
+        assert_eq!(chans[0].kind(), 9);
         assert_eq!(chans[0].tagged.as_ref().unwrap().params, Params::Unknown);
         // Writing it back changes nothing.
-        let out = mode_entries(&chans, &ModeSettings::default(), &entries, HashMap::new);
+        let out = me(&chans, &ModeSettings::default(), &entries, HashMap::new);
         assert_eq!(out, entries);
+    }
+
+    #[test]
+    fn a_p25_trunked_tag_reads_and_writes_back_unchanged() {
+        // Kind 3 on system 2 (0-based), transmit off, kind bit 4 (no fallback), follow every group, a trailing byte.
+        let t = Tag { kind: 3, system: 1, check: name_check("Trunk"), flags: 0x10, fb_chan: 0, fb_check: 0, params: vec![1, 7] };
+        let entries = vec![Entry { key: TAG_KEY + 4, value: encode_tag(&t) }];
+        let mut c = ch(5, "Trunk");
+        c.mode = Mode::Dmr;
+        c.rx_only = true;
+        let mut chans = vec![c];
+        decode_tags(&mut chans, &entries);
+        let tg = chans[0].tagged.as_ref().unwrap();
+        assert_eq!((tg.kind, tg.system, tg.tx, tg.no_fallback), (KIND_P25_TRUNK, 1, false, true));
+        assert_eq!(tg.params, Params::P25Trunk(P25TrunkChan { follow_all: true }));
+        assert_eq!(me(&chans, &ModeSettings::default(), &entries, HashMap::new), entries);
+        // Turning follow-all off keeps the other bits and the trailing byte.
+        if let Some(t) = &mut chans[0].tagged {
+            t.params = Params::P25Trunk(P25TrunkChan { follow_all: false });
+        }
+        let out = me(&chans, &ModeSettings::default(), &entries, HashMap::new);
+        assert_eq!(decode_tag(&out[0].value).unwrap().params, vec![0, 7]);
     }
 
     #[test]
     fn the_unit_ids_round_trip_and_zero_removes_the_key() {
         let s = ModeSettings { p25_unit_id: 3_100_001, nxdn_unit_id: 4242 };
-        let e = mode_entries(&[], &s, &[], HashMap::new);
+        let e = me(&[], &s, &[], HashMap::new);
         assert_eq!(decode_settings(&e), s);
         assert_eq!(kv::get_value(&e, SETTING_KEY + 2), Some(&3_100_001u32.to_le_bytes()[..]));
         assert_eq!(kv::get_value(&e, SETTING_KEY + 4), Some(&4242u16.to_le_bytes()[..]));
-        let none = mode_entries(&[], &ModeSettings::default(), &e, HashMap::new);
+        let none = me(&[], &ModeSettings::default(), &e, HashMap::new);
         assert!(none.is_empty());
         // Out of range reads as unset.
         let bad = vec![

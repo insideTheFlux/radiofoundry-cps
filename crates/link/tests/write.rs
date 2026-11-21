@@ -291,7 +291,7 @@ use rfcps_core::records::Mode;
 #[test]
 fn a_p25_channel_writes_its_record_and_its_tag() {
     let (mut radio, base, mut cp) = setup();
-    modes::set_kind(&mut cp.channels[1], modes::KIND_P25, Mode::Dmr);
+    modes::set_kind(&mut cp.channels[1], modes::KIND_P25, Mode::Dmr, &[]);
     cp.channels[1].tagged.as_mut().unwrap().params = Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x123 });
     cp.mode_settings.p25_unit_id = 3_100_001;
     let edited = cp.encode(&base);
@@ -312,7 +312,7 @@ fn a_p25_channel_writes_its_record_and_its_tag() {
 #[test]
 fn an_nxdn_tag_follows_a_rename_and_is_removed_with_its_channel() {
     let (mut radio, base, mut cp) = setup();
-    modes::set_kind(&mut cp.channels[0], modes::KIND_NXDN, Mode::Dmr);
+    modes::set_kind(&mut cp.channels[0], modes::KIND_NXDN, Mode::Dmr, &[]);
     cp.channels[0].tagged.as_mut().unwrap().params = Params::Nxdn(NxdnConv { rate9600: false, squelch: 0, rx_ran: 5, tx_ran: 5 });
     let one = cp.encode(&base);
     radio.write_image(&base, &one, &mut |_, _| {}).unwrap();
@@ -340,7 +340,7 @@ fn an_nxdn_tag_follows_a_rename_and_is_removed_with_its_channel() {
 fn a_file_without_an_area_keeps_the_radios_tags() {
     // The radio holds a P25 channel 2.
     let mut cp = Codeplug::decode(&image());
-    modes::set_kind(&mut cp.channels[1], modes::KIND_P25, Mode::Dmr);
+    modes::set_kind(&mut cp.channels[1], modes::KIND_P25, Mode::Dmr, &[]);
     let with_tag = cp.encode(&image());
     let mut radio = Radio::new(FakeRadio::new(with_tag.bytes()));
     let read = radio.read_image(&mut |_, _| {}).unwrap();
@@ -354,4 +354,46 @@ fn a_file_without_an_area_keeps_the_radios_tags() {
     let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
     assert_eq!(now.channel(2).unwrap().kind(), modes::KIND_P25, "the radio's tag is kept");
     assert_eq!(now.channel(3).unwrap().name, "From file");
+}
+
+#[test]
+fn a_system_and_a_channel_on_it_write_and_read_back() {
+    use rfcps_core::systems::{self, EntryBody, SysEntry, System, SystemFields};
+    let (mut radio, base, mut cp) = setup();
+    let mut s = System::new(systems::SYSTEM_P25_TRUNK, "Test Net");
+    s.number = 1;
+    s.entries.push(SysEntry {
+        cls: 0,
+        group: 0,
+        control: true,
+        flags: 0,
+        body: EntryBody::P25Control { iden: 1, chan_no: 5, rx_hz: 851_012_500, tx_hz: 806_012_500 },
+        raw: Vec::new(),
+    });
+    cp.systems.push(s);
+    let systems = cp.systems.clone();
+    modes::set_kind(&mut cp.channels[2], modes::KIND_P25_TRUNK, Mode::Dmr, &systems);
+    let edited = cp.encode(&base);
+    radio.write_image(&base, &edited, &mut |_, _| {}).unwrap();
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert_eq!(now.systems.len(), 1);
+    assert_eq!(now.systems[0].name, "Test Net");
+    assert!(!now.systems[0].tx, "a new system is listen only");
+    assert!(matches!(now.systems[0].fields, SystemFields::P25Trunk(_)));
+    let c = now.channel(3).unwrap();
+    assert_eq!(c.kind(), modes::KIND_P25_TRUNK);
+    assert_eq!((c.rx_hz, c.tx_hz), (851_012_500, 806_012_500));
+    assert!(c.rx_only && !c.tagged.as_ref().unwrap().tx, "receive only on both counts");
+    assert!(radio.verify(&edited).unwrap().is_empty());
+
+    // Deleting the system takes its entries and the tag's system away, and the channel is plain and receive only.
+    let mut cp = Codeplug::decode(&edited);
+    cp.remove_system(1);
+    let gone = cp.encode(&edited);
+    radio.write_image(&edited, &gone, &mut |_, _| {}).unwrap();
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert!(now.systems.is_empty());
+    assert_eq!(now.channel(3).unwrap().kind(), 0);
+    let area = rfcps_core::kv::decode_area(fake(&mut radio).image());
+    assert!(area.entries.iter().all(|e| !(0x0100..0x0400).contains(&e.key) || (0x0400..0x0800).contains(&e.key)), "{:?}", area.entries);
 }

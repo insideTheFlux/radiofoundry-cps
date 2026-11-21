@@ -460,9 +460,9 @@ fn channel_modes_encode_like_the_web_editor() {
     // 1: two channels made P25 and NXDN, and both unit IDs set
     let mut cp = Codeplug::decode(&base);
     let (i3, i5) = (pos(&cp, 3), pos(&cp, 5));
-    modes::set_kind(&mut cp.channels[i3], modes::KIND_P25, Mode::Dmr);
+    modes::set_kind(&mut cp.channels[i3], modes::KIND_P25, Mode::Dmr, &[]);
     cp.channels[i3].tagged.as_mut().unwrap().params = Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x456 });
-    modes::set_kind(&mut cp.channels[i5], modes::KIND_NXDN, Mode::Dmr);
+    modes::set_kind(&mut cp.channels[i5], modes::KIND_NXDN, Mode::Dmr, &[]);
     cp.channels[i5].tagged.as_mut().unwrap().params =
         Params::Nxdn(NxdnConv { rate9600: false, squelch: 1, rx_ran: 5, tx_ran: 9 });
     cp.mode_settings.p25_unit_id = 3_100_001;
@@ -488,9 +488,87 @@ fn channel_modes_encode_like_the_web_editor() {
     // 3: channel 3 made a plain FM channel again, channel 5's TX RAN edited
     let mut cp = Codeplug::decode(&one);
     let (i3, i5) = (pos(&cp, 3), pos(&cp, 5));
-    modes::set_kind(&mut cp.channels[i3], 0, Mode::Fm);
+    modes::set_kind(&mut cp.channels[i3], 0, Mode::Fm, &[]);
     if let Some(Params::Nxdn(p)) = cp.channels[i5].tagged.as_mut().map(|t| &mut t.params) {
         p.tx_ran = 12;
     }
     same(&cp.encode(&one), &want("modes3.bin"), "plain again, TX RAN edited");
+}
+
+/// Systems (channel-modes.md 7, p25-codeplug.md 3): a P25 trunked system with a site, a control channel and a plan row,
+/// a channel on it, edits, and the system deleted, as whole images against the web editor's. `RFCPS_SYS_DIR` holds
+/// the web editor's images (`edit_systems.mjs`, see `docs/testing.md`).
+#[test]
+fn systems_encode_like_the_web_editor() {
+    use rfcps_core::modes::{self, P25TrunkChan, Params};
+    use rfcps_core::records::Mode;
+    use rfcps_core::systems::{self, EntryBody, P25Trunk, SysEntry, System, SystemFields};
+    let (Ok(img_path), Ok(dir)) = (std::env::var("RFCPS_IMAGE"), std::env::var("RFCPS_SYS_DIR")) else {
+        eprintln!("RFCPS_IMAGE / RFCPS_SYS_DIR not set: skipped");
+        return;
+    };
+    let want = |n: &str| Image::from_bytes(&std::fs::read(format!("{dir}/{n}")).unwrap());
+    let base = Image::from_bytes(&std::fs::read(img_path).unwrap());
+    let same = |got: &Image, w: &Image, what: &str| {
+        let diff: Vec<usize> = (0..got.bytes().len()).filter(|&i| got.bytes()[i] != w.bytes()[i]).collect();
+        assert!(diff.is_empty(), "{what}: {} bytes differ, first at {:#x}", diff.len(), diff[0]);
+    };
+    let entry = |cls, group, control, body| SysEntry { cls, group, control, flags: 0, body, raw: Vec::new() };
+    let pos = |cp: &Codeplug, n: u16| cp.channels.iter().position(|c| c.number == n).unwrap();
+
+    // 1: a system and channel 6 on it
+    let mut cp = Codeplug::decode(&base);
+    let mut s = System::new(systems::SYSTEM_P25_TRUNK, "TestSys P25T");
+    s.number = 1;
+    s.fields = SystemFields::P25Trunk(P25Trunk {
+        wacn: Some(0xBEE00),
+        sysid: Some(0x3AB),
+        cc_nac: Some(0x293),
+        skip_enc: true,
+        plan_only: false,
+        no_reg: false,
+        hold_s: 5,
+        roam_dbm: -90,
+    });
+    s.entries.push(entry(1, 0, false, EntryBody::P25Site { rfss: Some(1), site: Some(1) }));
+    s.entries.push(entry(0, 0, true, EntryBody::P25Control { iden: 1, chan_no: 5, rx_hz: 851_012_500, tx_hz: 806_012_500 }));
+    s.entries.push(entry(
+        2,
+        1,
+        false,
+        EntryBody::P25Plan { base_hz: 851_006_250, spacing_hz: 12_500, tx_offset_hz: -45_000_000, bw_hz: 12_500, tdma: false, slots: 2 },
+    ));
+    cp.systems.push(s);
+    let i6 = pos(&cp, 6);
+    let systems = cp.systems.clone();
+    modes::set_kind(&mut cp.channels[i6], modes::KIND_P25_TRUNK, Mode::Dmr, &systems);
+    cp.channels[i6].tagged.as_mut().unwrap().params = Params::P25Trunk(P25TrunkChan { follow_all: true });
+    let one = cp.encode(&base);
+    same(&one, &want("sys1.bin"), "a system and a channel on it");
+
+    // It reads back as it was written, and writing the decoded codeplug again changes nothing.
+    let back = Codeplug::decode(&one);
+    assert_eq!(back.systems.len(), 1);
+    assert_eq!(back.systems[0].name, "TestSys P25T");
+    assert_eq!(back.systems[0].entries.len(), 3);
+    assert_eq!(back.channel(6).unwrap().kind(), modes::KIND_P25_TRUNK);
+    assert_eq!(back.encode(&one).bytes(), one.bytes(), "re-encoding the decoded image changes nothing");
+
+    // 2: renamed, transmit side on, a second control channel, follow-all off
+    let mut cp = Codeplug::decode(&one);
+    cp.systems[0].name = "Renamed Sys".into();
+    cp.systems[0].tx = true;
+    if let SystemFields::P25Trunk(f) = &mut cp.systems[0].fields {
+        f.hold_s = 9;
+    }
+    cp.systems[0].entries.push(entry(0, 0, true, EntryBody::P25Control { iden: 1, chan_no: 9, rx_hz: 851_312_500, tx_hz: 0 }));
+    let i6 = pos(&cp, 6);
+    cp.channels[i6].tagged.as_mut().unwrap().params = Params::P25Trunk(P25TrunkChan { follow_all: false });
+    same(&cp.encode(&one), &want("sys2.bin"), "edits");
+
+    // 3: the system deleted: its channel is a plain receive-only DMR channel
+    let mut cp = Codeplug::decode(&one);
+    cp.remove_system(1);
+    assert_eq!(cp.channel(6).unwrap().kind(), 0);
+    same(&cp.encode(&one), &want("sys3.bin"), "the system deleted");
 }

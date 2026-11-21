@@ -18,6 +18,7 @@ pub mod problems;
 pub mod qdmr;
 pub mod records;
 pub mod stock_dm32;
+pub mod systems;
 pub mod yaml;
 
 pub use image::Image;

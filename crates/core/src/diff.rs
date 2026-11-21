@@ -247,6 +247,59 @@ pub fn changes(old: &Codeplug, new: &Codeplug) -> Vec<Change> {
             });
         }
     }
+    for n in &new.systems {
+        match old.systems.iter().find(|o| o.number == n.number) {
+            None => out.push(Change {
+                table: Table::Systems,
+                kind: Kind::Added,
+                number: Some(n.number),
+                name: n.name.clone(),
+                detail: String::new(),
+            }),
+            Some(o) if o != n => {
+                let mut f = Vec::new();
+                if o.name != n.name {
+                    f.push("name");
+                }
+                if o.tx != n.tx {
+                    f.push(if n.tx { "transmit side on" } else { "listen only" });
+                }
+                if o.fields != n.fields || o.own_id != n.own_id || o.sharing != n.sharing {
+                    f.push("settings");
+                }
+                if o.entries.len() != n.entries.len()
+                    || o.entries.iter().zip(&n.entries).any(|(a, b)| a.cls != b.cls || a.group != b.group || a.control != b.control || a.body != b.body)
+                {
+                    f.push("sites, control channels or plan");
+                }
+                if o.secret.is_some() != n.secret.is_some() {
+                    f.push("secret");
+                }
+                if f.is_empty() {
+                    f.push("other fields");
+                }
+                out.push(Change {
+                    table: Table::Systems,
+                    kind: Kind::Changed,
+                    number: Some(n.number),
+                    name: n.name.clone(),
+                    detail: f.join(", "),
+                });
+            }
+            _ => {}
+        }
+    }
+    for o in &old.systems {
+        if !new.systems.iter().any(|n| n.number == o.number) {
+            out.push(Change {
+                table: Table::Systems,
+                kind: Kind::Removed,
+                number: Some(o.number),
+                name: o.name.clone(),
+                detail: String::new(),
+            });
+        }
+    }
     out
 }
 
@@ -278,7 +331,7 @@ mod tests {
         use crate::modes;
         use crate::records::Mode;
         let (a, mut b) = two();
-        modes::set_kind(&mut b.channels[0], modes::KIND_NXDN, Mode::Dmr);
+        modes::set_kind(&mut b.channels[0], modes::KIND_NXDN, Mode::Dmr, &[]);
         b.mode_settings.nxdn_unit_id = 77;
         let ch = changes(&a, &b);
         assert!(ch.iter().any(|c| c.table == Table::Channels && c.detail.contains("channel mode")));
@@ -321,5 +374,24 @@ mod tests {
         assert!(removed
             .iter()
             .any(|c| c.kind == Kind::Removed && c.number == Some(2)));
+    }
+
+    #[test]
+    fn a_system_is_an_added_changed_or_removed_change() {
+        use crate::systems::{System, SYSTEM_P25_TRUNK};
+        let (a, mut b) = two();
+        let mut s = System::new(SYSTEM_P25_TRUNK, "Net");
+        s.number = 1;
+        b.systems.push(s);
+        let ch = changes(&a, &b);
+        assert!(ch.iter().any(|c| c.table == Table::Systems && c.kind == Kind::Added && c.name == "Net"));
+        // Then turn the transmit side on, and delete it again.
+        let mut c = b.clone();
+        c.systems[0].tx = true;
+        let ch = changes(&b, &c);
+        assert_eq!(ch.len(), 1);
+        assert_eq!(ch[0].detail, "transmit side on");
+        let ch = changes(&b, &a);
+        assert!(ch.iter().any(|c| c.table == Table::Systems && c.kind == Kind::Removed));
     }
 }

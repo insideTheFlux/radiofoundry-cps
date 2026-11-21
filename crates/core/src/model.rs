@@ -19,6 +19,10 @@ pub struct Codeplug {
     pub rx_lists: Vec<RxList>,
     /// The kinds' radio-wide records (the P25 and NXDN unit IDs) in the settings area.
     pub mode_settings: crate::modes::ModeSettings,
+    /// The systems of the trunked kinds, with their entries and secrets (channel-modes.md 7).
+    pub systems: Vec<crate::systems::System>,
+    /// The entries of systems that aren't there: kept as found.
+    pub orphan_entries: Vec<Vec<u8>>,
 }
 
 fn channel_used(b: &[u8], n: usize) -> bool {
@@ -79,14 +83,61 @@ impl Codeplug {
         };
         crate::modes::decode_tags(&mut channels, &entries);
         let mode_settings = crate::modes::decode_settings(&entries);
+        let names: std::collections::HashMap<u16, String> =
+            channels.iter().map(|c| (c.number, c.name.clone())).collect();
+        let (systems, orphan_entries) = crate::systems::decode_systems(&entries, &names);
         Self {
             mode_settings,
+            systems,
+            orphan_entries,
             general: decode_general(b),
             channels,
             vfo,
             zones,
             contacts,
             rx_lists,
+        }
+    }
+
+    /// Whether the keys, modes and systems fit the settings area of `base` (4 KB, shared with every other key). An
+    /// area of a newer version is never written, so it counts as fitting (the problems list says so separately).
+    pub fn settings_area_fits(&self, base: &Image) -> bool {
+        use crate::kv::{self, AreaState};
+        if kv::decode_area(base.bytes()).state == AreaState::Newer {
+            return true;
+        }
+        let mut b = base.bytes().to_vec();
+        let mut systems = self.systems.clone();
+        crate::systems::number_systems(&mut systems);
+        let keys_ok = kv::put_keys(&mut b, &self.general.keys);
+        let modes_ok = crate::modes::encode_modes(
+            &crate::modes::ModesIn {
+                channels: &self.channels,
+                settings: &self.mode_settings,
+                systems: &systems,
+                orphans: &self.orphan_entries,
+            },
+            &mut b,
+            || crate::modes::channel_names(base.bytes()),
+        );
+        keys_ok && modes_ok
+    }
+
+    /// A system the codeplug has, by number (1-255).
+    pub fn system(&self, number: u16) -> Option<&crate::systems::System> {
+        self.systems.iter().find(|s| s.number == number)
+    }
+
+    /// Takes a system out, with its entries and secret (the writer drops them). Channels on it become plain
+    /// receive-only DMR channels: their record holds the system's frequencies, where they must not transmit.
+    pub fn remove_system(&mut self, number: u16) {
+        self.systems.retain(|s| s.number != number);
+        let systems = self.systems.clone();
+        for c in &mut self.channels {
+            if c.tagged.as_ref().is_some_and(|t| t.system != 0xFF && u16::from(t.system) + 1 == number) {
+                crate::modes::set_kind(c, 0, crate::records::Mode::Dmr, &systems);
+                c.rx_only = true;
+            }
         }
     }
 
@@ -106,6 +157,8 @@ impl Codeplug {
     pub fn encode(&self, base: &Image) -> Image {
         let mut img = base.clone();
         let b = img.bytes_mut();
+        let mut systems = self.systems.clone();
+        crate::systems::number_systems(&mut systems);
 
         // Channels: the records, then the in-use bitmaps. A channel without a number is not stored.
         let mut bits = [0u8; MAX_CHANNELS / 8];
@@ -117,7 +170,7 @@ impl Codeplug {
             let mut synced;
             let c = if c.tagged.is_some() {
                 synced = c.clone();
-                crate::modes::stand_in(&mut synced);
+                crate::modes::stand_in(&mut synced, &systems);
                 &synced
             } else {
                 c
@@ -216,9 +269,16 @@ impl Codeplug {
 
         encode_general(&self.general, b);
         // The modes' records after the records they name (channel-modes.md 2.4: the record first, then its tag).
-        crate::modes::encode_modes(&self.channels, &self.mode_settings, b, || {
-            crate::modes::channel_names(base.bytes())
-        });
+        crate::modes::encode_modes(
+            &crate::modes::ModesIn {
+                channels: &self.channels,
+                settings: &self.mode_settings,
+                systems: &systems,
+                orphans: &self.orphan_entries,
+            },
+            b,
+            || crate::modes::channel_names(base.bytes()),
+        );
         self.fix_lucz(b);
         img
     }
