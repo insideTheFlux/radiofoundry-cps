@@ -9,6 +9,7 @@
 use crate::fields::parse_tone;
 use crate::freqs::{is_weather, listen_band, ListenBand};
 use crate::model::Codeplug;
+use crate::modes::{Params, NAC_ANY, NAC_REPEAT_ANY, NXDN_UNIT_MAX, P25_UNIT_MAX, P25_UNIT_WARN};
 use crate::records::{CallType, Mode, MAX_CHANNELS, MAX_CONTACTS, MAX_RX_LISTS, MAX_ZONES};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -294,6 +295,51 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
         }
     }
 
+    // Channel modes (channel-modes.md, p25-codeplug.md, nxdn-codeplug.md).
+    for c in &cp.channels {
+        let Some(t) = &c.tagged else { continue };
+        let (n, name) = (Some(c.number), c.name.as_str());
+        let target = c.contact_ref(&cp.contacts);
+        match &t.params {
+            Params::P25(p) => {
+                if p.rx_nac == NAC_REPEAT_ANY {
+                    add(err, Table::Channels, n, name, "The RX NAC 0xF7F is not allowed (0xF7E is any NAC).".into());
+                }
+                if p.tx_nac == NAC_ANY || p.tx_nac == NAC_REPEAT_ANY {
+                    add(err, Table::Channels, n, name, "A TX NAC can't be 0xF7E or 0xF7F.".into());
+                }
+                if target.is_some_and(|k| k.call_type == CallType::Group && k.id > 0xFFFF) {
+                    add(warn, Table::Channels, n, name, "The talk group is above 65535: the channel calls talk group 1.".into());
+                }
+            }
+            Params::Nxdn(_) => {
+                if target.is_some_and(|k| k.call_type == CallType::Group && k.id > 0xFFFF) {
+                    add(warn, Table::Channels, n, name, "The group is above 65535: the channel calls group 1.".into());
+                }
+                if target.is_some_and(|k| k.call_type == CallType::Private && k.id > NXDN_UNIT_MAX) {
+                    add(warn, Table::Channels, n, name, format!("The unit ID is above {NXDN_UNIT_MAX}: the channel calls group 1."));
+                }
+                if c.dmr_id > NXDN_UNIT_MAX {
+                    add(warn, Table::Channels, n, name, format!("The channel's ID is above {NXDN_UNIT_MAX}: the radio's NXDN unit ID is used."));
+                }
+            }
+            Params::Unknown => {
+                if !(1..=4).contains(&t.kind) {
+                    add(warn, Table::Channels, n, name, format!("The channel is of a mode this editor does not know (kind {}); it is kept as it is.", t.kind));
+                }
+            }
+        }
+    }
+    let ms = &cp.mode_settings;
+    if ms.p25_unit_id > P25_UNIT_MAX {
+        add(err, Table::General, None, "", format!("The P25 unit ID is above {P25_UNIT_MAX}."));
+    } else if ms.p25_unit_id > P25_UNIT_WARN {
+        add(warn, Table::General, None, "", format!("The P25 unit ID is longer than {P25_UNIT_WARN}: unusual."));
+    }
+    if u32::from(ms.nxdn_unit_id) > NXDN_UNIT_MAX {
+        add(err, Table::General, None, "", format!("The NXDN unit ID is above {NXDN_UNIT_MAX}."));
+    }
+
     for (i, z) in cp.zones.iter().enumerate() {
         let n = Some(i as u16 + 1);
         if z.name.is_empty() {
@@ -533,5 +579,33 @@ mod tests {
         assert!(m.contains(&"The contact has no name."));
         assert!(m.contains(&"The DMR ID is not between 1 and 16777215."));
         assert_eq!(error_count(&p), 2);
+    }
+
+    #[test]
+    fn channel_mode_problems() {
+        use crate::modes::{self, NxdnConv, P25Conv, Params};
+        let mut c = cp();
+        let mut a = chan(1, "P25 A", 146_520_000);
+        modes::set_kind(&mut a, modes::KIND_P25, Mode::Dmr);
+        a.tagged.as_mut().unwrap().params = Params::P25(P25Conv { squelch: 0, rx_nac: 0xF7F, tx_nac: 0xF7E });
+        let mut b = chan(2, "NXDN B", 146_540_000);
+        modes::set_kind(&mut b, modes::KIND_NXDN, Mode::Dmr);
+        b.tagged.as_mut().unwrap().params = Params::Nxdn(NxdnConv::default());
+        b.dmr_id = 70_000;
+        c.channels = vec![a, b];
+        c.mode_settings.p25_unit_id = 0x100_0000;
+        c.mode_settings.nxdn_unit_id = 65_500;
+        let p = validate(&c, None);
+        let m = msgs(&p);
+        assert!(m.iter().any(|x| x.contains("RX NAC 0xF7F")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("TX NAC")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("channel's ID is above 65519")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("P25 unit ID is above")), "{m:?}");
+        // A good one has none of them.
+        let mut ok = cp();
+        let mut a = chan(1, "P25 A", 146_520_000);
+        modes::set_kind(&mut a, modes::KIND_P25, Mode::Dmr);
+        ok.channels = vec![a];
+        assert!(validate(&ok, None).iter().all(|x| !x.message.contains("NAC") && !x.message.contains("unit ID")));
     }
 }

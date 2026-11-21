@@ -94,9 +94,17 @@ pub struct Channel {
     pub sfr_a: u8,
     pub sfr_b: u8,
     pub tone_burst: bool,
+    /// What a live tag in the settings area makes of the channel (P25, NXDN, ...); `None` for a plain channel. A
+    /// tagged channel's record is a safe stand-in, DMR and receive only (channel-modes.md 2.3).
+    pub tagged: Option<crate::modes::Tagged>,
 }
 
 impl Channel {
+    /// The contact the channel calls, if it has one.
+    pub fn contact_ref<'a>(&self, contacts: &'a [Contact]) -> Option<&'a Contact> {
+        (self.contact != 0).then(|| contacts.iter().find(|k| k.number == self.contact)).flatten()
+    }
+
     /// A new FM channel: wide, radio-default power and squelch, the vendor defaults in the bytes no field covers.
     pub fn new(number: u16, rx_hz: u64, tx_hz: u64) -> Self {
         let mut r = blank_channel();
@@ -156,6 +164,7 @@ pub fn decode_channel(number: u16, r: &[u8]) -> Option<Channel> {
         sfr_a: r[0x25],
         sfr_b: r[0x2A] & 0xBF,
         tone_burst: r[0x2A] != 0xFF && r[0x2A] & 0x40 != 0,
+        tagged: None,
     })
 }
 

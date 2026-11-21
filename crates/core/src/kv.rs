@@ -381,6 +381,22 @@ fn put_area(bytes: &mut [u8], entries: &[Entry]) -> bool {
     true
 }
 
+/// The entries of an image's area as a writer starts from them: the first of each key, in order; none when the area
+/// isn't valid. `None` for an area of a newer version, which is never written.
+pub fn entries_for_write(bytes: &[u8]) -> Option<Vec<Entry>> {
+    let area = decode_area(bytes);
+    (area.state != AreaState::Newer).then(|| dedupe(&area.entries))
+}
+
+/// Writes `entries` as the area when they differ from `before`. False (nothing written) when the area is of a newer
+/// version or the entries don't fit.
+pub fn put_entries(bytes: &mut [u8], before: &[Entry], entries: &[Entry]) -> bool {
+    if before == entries {
+        return true;
+    }
+    put_area(bytes, entries)
+}
+
 /// The keys an edit changes, written onto the area in an image's bytes. The area is left alone when every key
 /// already reads as asked, and refused (false) when it is of a newer version or the keys don't fit.
 pub fn put_keys(bytes: &mut [u8], keys: &Keys) -> bool {

@@ -282,3 +282,76 @@ fn an_image_without_an_area_does_not_erase_the_radios_keys() {
     radio.write_image(&base, &file, &mut |_, _| {}).unwrap();
     assert_eq!(radio_keys(&mut radio), keys);
 }
+
+// --- Channel modes (channel-modes.md) ---
+
+use rfcps_core::modes::{self, NxdnConv, P25Conv, Params};
+use rfcps_core::records::Mode;
+
+#[test]
+fn a_p25_channel_writes_its_record_and_its_tag() {
+    let (mut radio, base, mut cp) = setup();
+    modes::set_kind(&mut cp.channels[1], modes::KIND_P25, Mode::Dmr);
+    cp.channels[1].tagged.as_mut().unwrap().params = Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x123 });
+    cp.mode_settings.p25_unit_id = 3_100_001;
+    let edited = cp.encode(&base);
+    let report = radio.write_image(&base, &edited, &mut |_, _| {}).unwrap();
+    // The channel's block and the settings area's: the record first, then its tag.
+    assert_eq!(report.blocks, 2);
+    assert_eq!(fake(&mut radio).written_blocks, vec![channel_addr(2) / 4096 * 4096, KV_ADDR]);
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    let c = now.channel(2).unwrap();
+    assert_eq!(c.kind(), modes::KIND_P25);
+    assert_eq!(c.tagged.as_ref().unwrap().params, Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x123 }));
+    // The record a reader without tags sees is receive-only DMR: it can't transmit.
+    assert!(c.rx_only && c.mode == Mode::Dmr);
+    assert_eq!(now.mode_settings.p25_unit_id, 3_100_001);
+    assert!(radio.verify(&edited).unwrap().is_empty());
+}
+
+#[test]
+fn an_nxdn_tag_follows_a_rename_and_is_removed_with_its_channel() {
+    let (mut radio, base, mut cp) = setup();
+    modes::set_kind(&mut cp.channels[0], modes::KIND_NXDN, Mode::Dmr);
+    cp.channels[0].tagged.as_mut().unwrap().params = Params::Nxdn(NxdnConv { rate9600: false, squelch: 0, rx_ran: 5, tx_ran: 5 });
+    let one = cp.encode(&base);
+    radio.write_image(&base, &one, &mut |_, _| {}).unwrap();
+    assert_eq!(radio.read_image(&mut |_, _| {}).unwrap().bytes(), one.bytes());
+
+    // Renamed: the tag follows, so the channel is still NXDN.
+    let mut cp = Codeplug::decode(&one);
+    cp.channels[0].name = "Renamed".into();
+    let two = cp.encode(&one);
+    radio.write_image(&one, &two, &mut |_, _| {}).unwrap();
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert_eq!(now.channels[0].name, "Renamed");
+    assert_eq!(now.channels[0].kind(), modes::KIND_NXDN);
+
+    // Deleted: its tag goes with it.
+    let mut cp = Codeplug::decode(&two);
+    cp.channels.remove(0);
+    let three = cp.encode(&two);
+    radio.write_image(&two, &three, &mut |_, _| {}).unwrap();
+    let area = rfcps_core::kv::decode_area(fake(&mut radio).image());
+    assert!(area.entries.iter().all(|e| !(0x0400..0x0800).contains(&e.key)), "{:?}", area.entries);
+}
+
+#[test]
+fn a_file_without_an_area_keeps_the_radios_tags() {
+    // The radio holds a P25 channel 2.
+    let mut cp = Codeplug::decode(&image());
+    modes::set_kind(&mut cp.channels[1], modes::KIND_P25, Mode::Dmr);
+    let with_tag = cp.encode(&image());
+    let mut radio = Radio::new(FakeRadio::new(with_tag.bytes()));
+    let read = radio.read_image(&mut |_, _| {}).unwrap();
+    // A file from another tool: what was read (channel 2's record is the stand-in), nothing in the area, one channel
+    // edited.
+    let mut cp = Codeplug::decode(&read);
+    cp.channels[2].name = "From file".into();
+    let mut file = cp.encode(&read);
+    file.bytes_mut()[KV_ADDR..KV_ADDR + KV_SIZE].fill(0xFF);
+    radio.write_image(&read, &file, &mut |_, _| {}).unwrap();
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert_eq!(now.channel(2).unwrap().kind(), modes::KIND_P25, "the radio's tag is kept");
+    assert_eq!(now.channel(3).unwrap().name, "From file");
+}

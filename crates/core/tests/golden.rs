@@ -437,3 +437,60 @@ fn the_settings_area_matches_the_web_editor() {
     kv::area_for_write(&mut file, &radio, &sector(&a)).unwrap();
     assert_eq!(sector(&file), read("kv3.bin"), "area for a write");
 }
+
+/// Channel modes (channel-modes.md, p25-codeplug.md, nxdn-codeplug.md): the same edits made with the web editor's
+/// `channelmodes.js` and with this port give the same image, byte for byte. `RFCPS_MODES_DIR` holds the web editor's
+/// images (`edit_modes.mjs`, see `docs/testing.md`).
+#[test]
+fn channel_modes_encode_like_the_web_editor() {
+    use rfcps_core::modes::{self, NxdnConv, P25Conv, Params};
+    use rfcps_core::records::Mode;
+    let (Ok(img_path), Ok(dir)) = (std::env::var("RFCPS_IMAGE"), std::env::var("RFCPS_MODES_DIR")) else {
+        eprintln!("RFCPS_IMAGE / RFCPS_MODES_DIR not set: skipped");
+        return;
+    };
+    let want = |n: &str| Image::from_bytes(&std::fs::read(format!("{dir}/{n}")).unwrap());
+    let base = Image::from_bytes(&std::fs::read(img_path).unwrap());
+    let pos = |cp: &Codeplug, n: u16| cp.channels.iter().position(|c| c.number == n).unwrap();
+    let same = |got: &Image, w: &Image, what: &str| {
+        let diff: Vec<usize> = (0..got.bytes().len()).filter(|&i| got.bytes()[i] != w.bytes()[i]).collect();
+        assert!(diff.is_empty(), "{what}: {} bytes differ, first at {:#x}", diff.len(), diff[0]);
+    };
+
+    // 1: two channels made P25 and NXDN, and both unit IDs set
+    let mut cp = Codeplug::decode(&base);
+    let (i3, i5) = (pos(&cp, 3), pos(&cp, 5));
+    modes::set_kind(&mut cp.channels[i3], modes::KIND_P25, Mode::Dmr);
+    cp.channels[i3].tagged.as_mut().unwrap().params = Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x456 });
+    modes::set_kind(&mut cp.channels[i5], modes::KIND_NXDN, Mode::Dmr);
+    cp.channels[i5].tagged.as_mut().unwrap().params =
+        Params::Nxdn(NxdnConv { rate9600: false, squelch: 1, rx_ran: 5, tx_ran: 9 });
+    cp.mode_settings.p25_unit_id = 3_100_001;
+    cp.mode_settings.nxdn_unit_id = 4242;
+    let one = cp.encode(&base);
+    same(&one, &want("modes1.bin"), "first edit");
+
+    // The decoded image reads back as the same modes.
+    let back = Codeplug::decode(&one);
+    assert_eq!(back.channel(3).unwrap().kind(), modes::KIND_P25);
+    assert_eq!(back.channel(5).unwrap().kind(), modes::KIND_NXDN);
+    assert_eq!(back.mode_settings, cp.mode_settings);
+    assert_eq!(back.encode(&one).bytes(), one.bytes(), "re-encoding the decoded image changes nothing");
+
+    // 2: the tagged channel 3 renamed, tagged channel 5 deleted, the P25 unit ID removed
+    let mut cp = Codeplug::decode(&one);
+    let i3 = pos(&cp, 3);
+    cp.channels[i3].name = "Renamed_P25".into();
+    cp.channels.retain(|c| c.number != 5);
+    cp.mode_settings.p25_unit_id = 0;
+    same(&cp.encode(&one), &want("modes2.bin"), "rename and delete");
+
+    // 3: channel 3 made a plain FM channel again, channel 5's TX RAN edited
+    let mut cp = Codeplug::decode(&one);
+    let (i3, i5) = (pos(&cp, 3), pos(&cp, 5));
+    modes::set_kind(&mut cp.channels[i3], 0, Mode::Fm);
+    if let Some(Params::Nxdn(p)) = cp.channels[i5].tagged.as_mut().map(|t| &mut t.params) {
+        p.tx_ran = 12;
+    }
+    same(&cp.encode(&one), &want("modes3.bin"), "plain again, TX RAN edited");
+}

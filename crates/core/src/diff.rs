@@ -35,6 +35,7 @@ fn channel_fields(a: &Channel, b: &Channel) -> Vec<&'static str> {
     chk(a.rx_hz != b.rx_hz, "RX");
     chk(a.tx_hz != b.tx_hz, "TX");
     chk(a.mode != b.mode, "mode");
+    chk(a.tagged != b.tagged, "channel mode");
     chk(a.power != b.power, "power");
     chk(a.tot != b.tot, "TX timeout");
     chk(a.rx_tone != b.rx_tone, "RX tone");
@@ -92,6 +93,9 @@ pub fn changes(old: &Codeplug, new: &Codeplug) -> Vec<Change> {
     }
     if k0.sig != k1.sig {
         gf.push("signaling tones");
+    }
+    if old.mode_settings != new.mode_settings {
+        gf.push("unit IDs");
     }
     if !gf.is_empty() {
         out.push(Change {
@@ -267,6 +271,18 @@ mod tests {
     fn identical_codeplugs_have_no_changes() {
         let (a, b) = two();
         assert!(changes(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn a_channel_mode_and_the_unit_ids_are_changes() {
+        use crate::modes;
+        use crate::records::Mode;
+        let (a, mut b) = two();
+        modes::set_kind(&mut b.channels[0], modes::KIND_NXDN, Mode::Dmr);
+        b.mode_settings.nxdn_unit_id = 77;
+        let ch = changes(&a, &b);
+        assert!(ch.iter().any(|c| c.table == Table::Channels && c.detail.contains("channel mode")));
+        assert!(ch.iter().any(|c| c.table == Table::General && c.detail == "unit IDs"));
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub mod freqs;
 pub mod image;
 pub mod kv;
 pub mod model;
+pub mod modes;
 pub mod problems;
 pub mod qdmr;
 pub mod records;

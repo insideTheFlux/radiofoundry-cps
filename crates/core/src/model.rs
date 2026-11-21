@@ -17,6 +17,8 @@ pub struct Codeplug {
     pub zones: Vec<Zone>,
     pub contacts: Vec<Contact>,
     pub rx_lists: Vec<RxList>,
+    /// The kinds' radio-wide records (the P25 and NXDN unit IDs) in the settings area.
+    pub mode_settings: crate::modes::ModeSettings,
 }
 
 fn channel_used(b: &[u8], n: usize) -> bool {
@@ -68,7 +70,17 @@ impl Codeplug {
             zones.push(decode_zone(slot, r, per));
         }
         let vfo = [0, 1].map(|i| decode_channel(0, &b[VFO[i]..VFO[i] + CH_SIZE]));
+        // The modes: the settings area's tags onto the channels, and the kinds' radio-wide records.
+        let area = crate::kv::decode_area(b);
+        let entries = if area.state == crate::kv::AreaState::Valid {
+            crate::kv::dedupe(&area.entries)
+        } else {
+            Vec::new()
+        };
+        crate::modes::decode_tags(&mut channels, &entries);
+        let mode_settings = crate::modes::decode_settings(&entries);
         Self {
+            mode_settings,
             general: decode_general(b),
             channels,
             vfo,
@@ -101,6 +113,15 @@ impl Codeplug {
             let n = usize::from(c.number);
             bits[(n - 1) >> 3] |= 1 << ((n - 1) & 7);
             let a = channel_addr(n);
+            // A channel of a kind keeps its safe stand-in record (channel-modes.md 2.3).
+            let mut synced;
+            let c = if c.tagged.is_some() {
+                synced = c.clone();
+                crate::modes::stand_in(&mut synced);
+                &synced
+            } else {
+                c
+            };
             put_channel(&mut b[a..a + CH_SIZE], c);
         }
         for bank in 0..8 {
@@ -194,6 +215,10 @@ impl Codeplug {
         }
 
         encode_general(&self.general, b);
+        // The modes' records after the records they name (channel-modes.md 2.4: the record first, then its tag).
+        crate::modes::encode_modes(&self.channels, &self.mode_settings, b, || {
+            crate::modes::channel_names(base.bytes())
+        });
         self.fix_lucz(b);
         img
     }
