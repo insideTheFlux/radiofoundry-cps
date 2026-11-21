@@ -16,6 +16,9 @@ mod worker;
 mod writeflow;
 mod zones;
 
+#[cfg(test)]
+mod gui_tests;
+
 use doc::Doc;
 use eframe::egui;
 use rfcps_core::freqs;
@@ -61,7 +64,11 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let ports = rfcps_link::ports();
+        Self::with_ports(rfcps_link::ports())
+    }
+
+    /// The app with a given port list. The GUI tests pass none, so they never see or open a real radio.
+    fn with_ports(ports: Vec<PortInfo>) -> Self {
         let port = ports
             .iter()
             .find(|p| p.usb)
@@ -373,7 +380,9 @@ impl App {
                     }
                     ui.separator();
                     ui.checkbox(&mut show_all, "Show built-in and legacy ports too");
-                });
+                })
+                .response
+                .on_hover_text("Serial port of the radio's programming cable");
             self.port = chosen;
             if show_all != self.show_all_ports {
                 self.show_all_ports = show_all;

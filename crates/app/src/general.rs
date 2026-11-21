@@ -28,17 +28,17 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
         .num_columns(2)
         .spacing([16.0, 9.0])
         .show(ui, |ui| {
-            ui.label("Radio name (callsign)");
-            name_edit(ui, &mut g.radio_name, 8, 140.0);
+            let l = ui.label("Radio name (callsign)");
+            name_edit(ui, &mut g.radio_name, 8, 140.0).labelled_by(l.id);
             ui.end_row();
-            ui.label("DMR ID");
+            let l = ui.label("DMR ID");
             let id = egui::Id::unique("general_dmr_id");
             let shown = if g.dmr_id == 0 {
                 String::new()
             } else {
                 g.dmr_id.to_string()
             };
-            let (_, v) = checked_text(ui, id, shown, 140.0, |s| {
+            let (r, v) = checked_text(ui, id, shown, 140.0, |s| {
                 let t = s.trim();
                 if t.is_empty() {
                     Some(0u32)
@@ -46,6 +46,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
                     t.parse::<u32>().ok().filter(|v| *v <= 16_777_215)
                 }
             });
+            r.labelled_by(l.id);
             if let Some(v) = v {
                 g.dmr_id = v;
             }
@@ -62,11 +63,12 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
                 ("Group call", &mut g.group_hang, "gh"),
                 ("Private call", &mut g.private_hang, "ph"),
             ] {
-                ui.label(label);
+                let l = ui.label(label);
                 let id = egui::Id::unique(("general_hang", salt));
-                let (_, v) = checked_text(ui, id, value.to_string(), 80.0, |s| {
+                let (r, v) = checked_text(ui, id, value.to_string(), 80.0, |s| {
                     s.trim().parse::<u8>().ok()
                 });
+                r.labelled_by(l.id);
                 if let Some(v) = v {
                     *value = v;
                 }
@@ -84,11 +86,11 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug) {
         .num_columns(2)
         .spacing([16.0, 9.0])
         .show(ui, |ui| {
-            ui.label("Line 1");
-            name_edit(ui, &mut g.boot_line1, 16, 240.0);
+            let l = ui.label("Line 1");
+            name_edit(ui, &mut g.boot_line1, 16, 240.0).labelled_by(l.id);
             ui.end_row();
-            ui.label("Line 2");
-            name_edit(ui, &mut g.boot_line2, 16, 240.0);
+            let l = ui.label("Line 2");
+            name_edit(ui, &mut g.boot_line2, 16, 240.0).labelled_by(l.id);
             ui.end_row();
         });
     ui.add_space(10.0);

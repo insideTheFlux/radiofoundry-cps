@@ -2,6 +2,26 @@
 
 `cargo test --workspace` runs the unit tests on synthetic images. No radio and no personal data are needed.
 
+## GUI tests
+
+`crates/app/src/gui_tests.rs` runs the real app headless in `egui_kittest` (through AccessKit): no window, no display,
+no radio. The app is built with no serial ports, and no test opens a file dialog or presses the final write button.
+They click buttons, tabs and menus by their labels and check the app's state: the welcome screen, a new codeplug, every
+tab, the Import and Export menus, the confirm and notice dialogs, the theme buttons, the Problems button and the
+write-failed banner.
+
+The harness also fails a test when a widget has no accessible name, which is how the port chooser and the General tab's
+fields were found. The Channels table still has unnamed fields (about a hundred on a full radio), so the real-image test
+switches that check off.
+
+```
+cargo test -p rfcps gui                              # the synthetic tests
+RFCPS_IMAGE=... cargo test -p rfcps gui              # also walks every tab of a real image (the file is only read)
+```
+
+Not covered: native file dialogs, the serial write itself (the software-radio tests in `rfcps-link` and the hand test
+on a radio cover it), and pixel snapshots (`egui_kittest`'s `snapshot` feature, not enabled).
+
 ## Against the web editor on a real image (local only)
 
 The decoder and encoder are ported from RadioFoundry's web editor. Three more tests compare them with it on a real
