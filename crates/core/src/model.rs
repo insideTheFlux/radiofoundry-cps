@@ -17,6 +17,9 @@ pub struct Codeplug {
     pub zones: Vec<Zone>,
     pub contacts: Vec<Contact>,
     pub rx_lists: Vec<RxList>,
+    /// DTMF contacts (1-63) and APRS configurations (1-8).
+    pub dtmf_contacts: Vec<DtmfContact>,
+    pub aprs: Vec<Aprs>,
     /// The kinds' radio-wide records (the P25 and NXDN unit IDs) in the settings area.
     pub mode_settings: crate::modes::ModeSettings,
     /// The systems of the trunked kinds, with their entries and secrets (channel-modes.md 7).
@@ -48,6 +51,20 @@ impl Codeplug {
             }
             let a = LISTS + (n - 1) * LIST_SIZE;
             rx_lists.push(decode_list(n as u8, &b[a..a + LIST_SIZE], count));
+        }
+        let mut dtmf_contacts = Vec::new();
+        for n in 1..=MAX_DTMF {
+            let a = DTMF_CONTACTS + (n - 1) * DTMF_SIZE;
+            if let Some(d) = decode_dtmf(n as u8, &b[a..a + DTMF_SIZE]) {
+                dtmf_contacts.push(d);
+            }
+        }
+        let mut aprs = Vec::new();
+        for n in 1..=MAX_APRS {
+            let a = APRS_BASE + (n - 1) * APRS_SIZE;
+            if let Some(p) = decode_aprs(n as u8, &b[a..a + APRS_SIZE]) {
+                aprs.push(p);
+            }
         }
         let mut channels = Vec::new();
         for n in 1..=MAX_CHANNELS {
@@ -87,6 +104,8 @@ impl Codeplug {
             channels.iter().map(|c| (c.number, c.name.clone())).collect();
         let (systems, orphan_entries) = crate::systems::decode_systems(&entries, &names);
         Self {
+            dtmf_contacts,
+            aprs,
             mode_settings,
             systems,
             orphan_entries,
@@ -121,6 +140,16 @@ impl Codeplug {
             || crate::modes::channel_names(base.bytes()),
         );
         keys_ok && modes_ok
+    }
+
+    /// Takes an APRS configuration out. Channels and VFOs that named it name none.
+    pub fn remove_aprs(&mut self, number: u8) {
+        self.aprs.retain(|p| p.number != number);
+        for c in self.channels.iter_mut().chain(self.vfo.iter_mut().flatten()) {
+            if c.aprs == number {
+                c.aprs = 0;
+            }
+        }
     }
 
     /// A system the codeplug has, by number (1-255).
@@ -264,6 +293,30 @@ impl Codeplug {
             if have.is_none_or(|h| h.name != want.name || h.contacts != want.contacts) {
                 encode_list(&want, &mut b[a..a + LIST_SIZE]);
                 b[LIST_COUNTS + n - 1] = (want.contacts.len() + 1) as u8;
+            }
+        }
+
+        // DTMF contacts and APRS configurations: an edited one is rewritten, a number without one is erased.
+        for n in 1..=MAX_DTMF {
+            let a = DTMF_CONTACTS + (n - 1) * DTMF_SIZE;
+            let have = decode_dtmf(n as u8, &b[a..a + DTMF_SIZE]);
+            match (self.dtmf_contacts.iter().find(|d| usize::from(d.number) == n), have) {
+                (Some(d), h) if h.as_ref().is_none_or(|h| h.name != d.name || h.code != d.code) => {
+                    encode_dtmf(d, &mut b[a..a + DTMF_SIZE]);
+                }
+                (None, Some(_)) => b[a] = 0xFF,
+                _ => {}
+            }
+        }
+        for n in 1..=MAX_APRS {
+            let a = APRS_BASE + (n - 1) * APRS_SIZE;
+            let have = decode_aprs(n as u8, &b[a..a + APRS_SIZE]);
+            match (self.aprs.iter().find(|p| usize::from(p.number) == n), have) {
+                (Some(p), h) if h.as_ref().is_none_or(|h| !same_aprs(h, p)) => {
+                    encode_aprs(p, &mut b[a..a + APRS_SIZE]);
+                }
+                (None, Some(_)) => b[a] = 0xFF,
+                _ => {}
             }
         }
 

@@ -329,16 +329,29 @@ fn the_csv_export_matches_the_web_editor() {
         return;
     };
     let cp = Codeplug::decode(&Image::from_bytes(&std::fs::read(img_path).unwrap()));
-    for t in [
-        TableKind::Contacts,
-        TableKind::RxLists,
-        TableKind::Channels,
-        TableKind::Zones,
-    ] {
+    for t in rfcps_core::csv::ORDER {
         let want = std::fs::read_to_string(format!("{dir}/{}", t.file())).unwrap();
         assert_eq!(export_table(&cp, t), want, "{}", t.file());
     }
+    let _ = TableKind::Zones;
     eprintln!("csv export identical to the web editor's");
+}
+
+/// The same for an image that holds DTMF contacts and APRS configurations, with a channel using one
+/// (`RFCPS_APRS_DIR`: `aprs1.bin` and the web editor's `csv/` of it).
+#[test]
+fn the_csv_export_with_aprs_and_dtmf_matches_the_web_editor() {
+    use rfcps_core::csv::export_table;
+    let Ok(dir) = std::env::var("RFCPS_APRS_DIR") else {
+        eprintln!("RFCPS_APRS_DIR not set: skipped");
+        return;
+    };
+    let cp = Codeplug::decode(&Image::from_bytes(&std::fs::read(format!("{dir}/aprs1.bin")).unwrap()));
+    assert_eq!((cp.aprs.len(), cp.dtmf_contacts.len()), (2, 2));
+    for t in rfcps_core::csv::ORDER {
+        let want = std::fs::read_to_string(format!("{dir}/csv/{}", t.file())).unwrap();
+        assert_eq!(export_table(&cp, t), want, "{}", t.file());
+    }
 }
 
 /// The CHIRP export of a real image is, byte for byte, the web editor's (`RFCPS_CHIRP_CSV`).
@@ -678,4 +691,164 @@ fn tier_iii_systems_encode_like_the_web_editor() {
     same(&gone, &want("t3_3.bin"), "the system deleted");
     let area = kv::decode_area(gone.bytes());
     assert!(area.entries.iter().all(|e| !(0x0100..0x0400).contains(&e.key) && e.key != 0x0800 && e.key != 0x0900 || (0x0400..0x0800).contains(&e.key)));
+}
+
+/// DTMF contacts and APRS configurations (open-firmware-cps.md 7.3.7, 7.3.8): created, edited and deleted, and an APRS
+/// record in the older layout, as whole images against the web editor's. `RFCPS_APRS_DIR` holds the web editor's
+/// images (`edit_aprs.mjs`, see `docs/testing.md`).
+#[test]
+fn dtmf_and_aprs_encode_like_the_web_editor() {
+    use rfcps_core::records::{Aprs, DtmfContact};
+    let (Ok(img_path), Ok(dir)) = (std::env::var("RFCPS_IMAGE"), std::env::var("RFCPS_APRS_DIR")) else {
+        eprintln!("RFCPS_IMAGE / RFCPS_APRS_DIR not set: skipped");
+        return;
+    };
+    let want = |n: &str| Image::from_bytes(&std::fs::read(format!("{dir}/{n}")).unwrap());
+    let base = Image::from_bytes(&std::fs::read(img_path).unwrap());
+    let same = |got: &Image, w: &Image, what: &str| {
+        let diff: Vec<usize> = (0..got.bytes().len()).filter(|&i| got.bytes()[i] != w.bytes()[i]).collect();
+        assert!(diff.is_empty(), "{what}: {} bytes differ, first at {:#x}", diff.len(), diff[0]);
+    };
+
+    // 1: two DTMF contacts (one lower case), two APRS configurations, channel 3 using the first
+    let mut cp = Codeplug::decode(&base);
+    cp.dtmf_contacts.push(DtmfContact { number: 1, name: "Home Gate".into(), code: "1234A#*".into() });
+    cp.dtmf_contacts.push(DtmfContact { number: 2, name: "Lowercase".into(), code: "ab12".into() });
+    let mut a = Aprs::new(1, "Mobile");
+    a.ssid = 9;
+    a.lat = 37.7749;
+    a.lon = -122.4194;
+    a.path1 = "WIDE1-1".into();
+    a.path2 = "WIDE2-2".into();
+    a.comment = "RadioFoundry test".into();
+    a.tx_hz = 144_390_000;
+    a.use_fixed = true;
+    a.qsy = true;
+    a.ambiguity = 2;
+    cp.aprs.push(a);
+    let mut b = Aprs::new(2, "Fixed");
+    b.lat = -33.8688;
+    b.lon = 151.2093;
+    b.sym_table = '\\';
+    b.sym_code = '-';
+    b.baud300 = true;
+    b.silent = true;
+    cp.aprs.push(b);
+    let i3 = cp.channels.iter().position(|c| c.number == 3).unwrap();
+    cp.channels[i3].aprs = 1;
+    let one = cp.encode(&base);
+    same(&one, &want("aprs1.bin"), "created");
+    // It reads back, with the lower case code in upper case, and re-encoding changes nothing.
+    let back = Codeplug::decode(&one);
+    assert_eq!(back.dtmf_contacts[1].code, "AB12");
+    assert_eq!((back.aprs.len(), back.aprs[0].ambiguity, back.aprs[0].path2.as_str()), (2, 2, "WIDE2-2"));
+    assert_eq!(back.encode(&one).bytes(), one.bytes(), "re-encoding the decoded image changes nothing");
+
+    // 2: a code changed, a DTMF contact removed, the first APRS edited, the second deleted
+    let mut cp = Codeplug::decode(&one);
+    cp.dtmf_contacts[0].code = "9999".into();
+    cp.dtmf_contacts.remove(1);
+    cp.aprs[0].comment = "Edited comment".into();
+    cp.aprs[0].lat = 38.5;
+    cp.aprs[0].ssid = 7;
+    cp.remove_aprs(2);
+    same(&cp.encode(&one), &want("aprs2.bin"), "edits and deletes");
+
+    // 3: the older layout reads as it is and is upgraded only when the record is rewritten
+    let old = want("aprs_old.bin");
+    let mut cp = Codeplug::decode(&old);
+    assert_eq!((cp.aprs[0].ambiguity, cp.aprs[0].baud300), (3, true));
+    same(&cp.encode(&old), &want("aprs3_unchanged.bin"), "the older layout, unchanged");
+    cp.aprs[0].comment = "Upgraded".into();
+    same(&cp.encode(&old), &want("aprs3_edited.bin"), "the older layout, rewritten");
+}
+
+/// qdmr YAML with APRS and DTMF: the export of an image that holds them, and the import of a file with awkward APRS
+/// systems (a three entry path, an unknown icon, a beacon period, a revert channel, a fixed position, a DMR position
+/// entry) are the web editor's. `RFCPS_APRS_DIR/qdmr/` holds its files (`qdmr_aprs_js.mjs`, see `docs/testing.md`).
+#[test]
+fn qdmr_with_aprs_and_dtmf_matches_the_web_editor() {
+    use rfcps_core::qdmr::{export_qdmr, import_qdmr, Note};
+    use serde_json::Value;
+    let (Ok(img_path), Ok(dir)) = (std::env::var("RFCPS_IMAGE"), std::env::var("RFCPS_APRS_DIR")) else {
+        eprintln!("RFCPS_IMAGE / RFCPS_APRS_DIR not set: skipped");
+        return;
+    };
+    let q = format!("{dir}/qdmr");
+    let read = |n: &str| std::fs::read_to_string(format!("{q}/{n}")).unwrap();
+    let same = |got: &str, want: &str, what: &str| {
+        if got != want {
+            let (a, b): (Vec<&str>, Vec<&str>) = (got.lines().collect(), want.lines().collect());
+            let at = a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+            panic!("{what} differs at line {}:\nrust: {:?}\nweb:  {:?}", at + 1, a.get(at), b.get(at));
+        }
+    };
+    let code = |n: Note| match n {
+        Note::Shortened => "shortened",
+        Note::PathCut => "path_cut",
+        Note::AprsPeriod => "aprs_period",
+        Note::IconUnknown => "icon_unknown",
+        Note::DmrPositioning => "dmr_positioning",
+        Note::TooManyAprs => "too_many_aprs",
+        Note::TooManyDtmf => "too_many_dtmfContacts",
+        Note::AprsNoChannel => "aprs_no_channel",
+        Note::AprsFlags => "aprs_flags",
+        Note::IconExport => "icon_export",
+        other => panic!("a note the test does not name: {other:?}"),
+    };
+    let notes_json = |notes: &[(Note, usize)]| -> Vec<(String, u64)> {
+        notes.iter().map(|(n, c)| (code(*n).to_string(), *c as u64)).collect()
+    };
+    let web_notes = |json: &str| -> Vec<(String, u64)> {
+        serde_json::from_str::<Vec<Value>>(json)
+            .unwrap()
+            .iter()
+            .map(|v| (v["code"].as_str().unwrap().to_string(), v["n"].as_u64().unwrap()))
+            .collect()
+    };
+
+    // 1: the export of an image that holds APRS and DTMF, its notes, and the round trip through the import
+    let aprs_img = Image::from_bytes(&std::fs::read(format!("{dir}/aprs1.bin")).unwrap());
+    let cp = Codeplug::decode(&aprs_img);
+    let (text, notes) = export_qdmr(&cp);
+    same(&text, &read("export.yaml"), "the export");
+    assert_eq!(notes_json(&notes), web_notes(&read("export_notes.json")));
+    let mut again = Codeplug::decode(&aprs_img);
+    import_qdmr(&mut again, &text).unwrap();
+    same(&export_qdmr(&again).0, &read("export_roundtrip.yaml"), "the round trip");
+
+    // 2: a rich file imported into the real image's codeplug: its export, its notes and the tables
+    let base = Image::from_bytes(&std::fs::read(img_path).unwrap());
+    let mut cp = Codeplug::decode(&base);
+    let report = import_qdmr(&mut cp, &read("rich.yaml")).unwrap();
+    let web: Value = serde_json::from_str(&read("rich_import.json")).unwrap();
+    assert_eq!(
+        notes_json(&report.notes),
+        web["notes"].as_array().unwrap().iter().map(|v| (v["code"].as_str().unwrap().to_string(), v["n"].as_u64().unwrap())).collect::<Vec<_>>(),
+        "the import's notes"
+    );
+    assert_eq!((report.aprs as u64, report.dtmf_contacts as u64), (web["counts"]["aprs"].as_u64().unwrap(), web["counts"]["dtmfContacts"].as_u64().unwrap()));
+    let (text, notes) = export_qdmr(&cp);
+    same(&text, &read("rich_export.yaml"), "the export of the imported file");
+    assert_eq!(notes_json(&notes), web_notes(&read("rich_export_notes.json")));
+    // The tables, field by field.
+    let gold: Value = serde_json::from_str(&read("rich_aprs.json")).unwrap();
+    for (a, g) in cp.aprs.iter().zip(gold["aprs"].as_array().unwrap()) {
+        assert_eq!(u64::from(a.number), g["n"].as_u64().unwrap());
+        assert_eq!(a.name, g["name"].as_str().unwrap());
+        assert_eq!(u64::from(a.ssid), g["ssid"].as_u64().unwrap());
+        assert!((a.lat - g["lat"].as_f64().unwrap()).abs() < 1e-9 && (a.lon - g["lon"].as_f64().unwrap()).abs() < 1e-9);
+        assert_eq!((a.path1.as_str(), a.path2.as_str()), (g["p1"].as_str().unwrap(), g["p2"].as_str().unwrap()));
+        assert_eq!((a.sym_table.to_string(), a.sym_code.to_string()), (g["st"].as_str().unwrap().to_string(), g["sc"].as_str().unwrap().to_string()));
+        assert_eq!(a.comment, g["comment"].as_str().unwrap());
+        assert_eq!(a.tx_hz, g["tx"].as_u64().unwrap());
+        assert_eq!((a.baud300, a.use_fixed, a.qsy, a.silent), (g["b3"].as_bool().unwrap(), g["fx"].as_bool().unwrap(), g["q"].as_bool().unwrap(), g["s"].as_bool().unwrap()));
+    }
+    assert_eq!(cp.aprs.len(), gold["aprs"].as_array().unwrap().len());
+    for (d, g) in cp.dtmf_contacts.iter().zip(gold["dtmf"].as_array().unwrap()) {
+        assert_eq!((d.name.as_str(), d.code.as_str()), (g["name"].as_str().unwrap(), g["code"].as_str().unwrap()));
+    }
+    let ch_aprs: Vec<Option<u64>> = cp.channels.iter().map(|c| (c.aprs != 0).then_some(u64::from(c.aprs))).collect();
+    let want: Vec<Option<u64>> = gold["chAprs"].as_array().unwrap().iter().map(Value::as_u64).collect();
+    assert_eq!(ch_aprs, want, "which channel uses which configuration");
 }

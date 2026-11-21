@@ -11,7 +11,10 @@ use crate::freqs::{is_weather, listen_band, ListenBand};
 use crate::model::Codeplug;
 use crate::modes::{Fallback, Params, NAC_ANY, NAC_REPEAT_ANY, NXDN_UNIT_MAX, P25_UNIT_MAX, P25_UNIT_WARN};
 use crate::systems::{self, EntryBody, SystemFields};
-use crate::records::{CallType, Mode, MAX_CHANNELS, MAX_CONTACTS, MAX_RX_LISTS, MAX_ZONES};
+use crate::records::{
+    valid_dtmf, CallType, Mode, APRS_COMMENT_MAX, APRS_NAME_MAX, MAX_APRS, MAX_CHANNELS, MAX_CONTACTS, MAX_DTMF, MAX_RX_LISTS,
+    MAX_ZONES,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -28,6 +31,8 @@ pub enum Table {
     RxLists,
     /// A system of a trunked mode (channel-modes.md 7).
     Systems,
+    Dtmf,
+    Aprs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -296,6 +301,46 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                 Some(c.number),
                 &c.name,
                 "Another channel has the same name.".into(),
+            );
+        }
+    }
+
+    // DTMF contacts and APRS configurations.
+    if cp.dtmf_contacts.len() > MAX_DTMF {
+        add(err, Table::Dtmf, None, "", format!("{} DTMF contacts; the most is {MAX_DTMF}.", cp.dtmf_contacts.len()));
+    }
+    if cp.aprs.len() > MAX_APRS {
+        add(err, Table::Aprs, None, "", format!("{} APRS configurations; the most is {MAX_APRS}.", cp.aprs.len()));
+    }
+    for d in &cp.dtmf_contacts {
+        let (n, name) = (Some(u16::from(d.number)), d.name.as_str());
+        if d.name.is_empty() {
+            add(err, Table::Dtmf, n, name, "The DTMF contact has no name.".into());
+        }
+        if !valid_dtmf(&d.code) {
+            add(err, Table::Dtmf, n, name, "The DTMF code must be 1 to 16 digits: 0-9, A-D, * or #.".into());
+        }
+    }
+    for a in &cp.aprs {
+        let (n, name) = (Some(u16::from(a.number)), a.name.as_str());
+        if a.name.is_empty() {
+            add(err, Table::Aprs, n, name, "The APRS configuration has no name.".into());
+        }
+        if a.name.chars().count() > APRS_NAME_MAX {
+            add(err, Table::Aprs, n, name, format!("The name is longer than {APRS_NAME_MAX} characters."));
+        }
+        if a.comment.chars().count() > APRS_COMMENT_MAX {
+            add(err, Table::Aprs, n, name, format!("The comment is longer than {APRS_COMMENT_MAX} characters."));
+        }
+    }
+    for c in &cp.channels {
+        if c.aprs != 0 && !cp.aprs.iter().any(|a| a.number == c.aprs) {
+            add(
+                warn,
+                Table::Channels,
+                Some(c.number),
+                &c.name,
+                format!("The channel names APRS configuration {}, which is not there.", c.aprs),
             );
         }
     }
@@ -875,5 +920,31 @@ mod tests {
         }
         ok.systems = vec![s];
         assert!(validate(&ok, None).iter().all(|x| x.table != Table::Systems), "{:?}", validate(&ok, None));
+    }
+
+    #[test]
+    fn dtmf_and_aprs_problems() {
+        use crate::records::{Aprs, DtmfContact};
+        let mut c = cp();
+        c.dtmf_contacts = vec![
+            DtmfContact { number: 1, name: String::new(), code: "12".into() },
+            DtmfContact { number: 2, name: "Bad".into(), code: "12E4".into() },
+            DtmfContact { number: 3, name: "Fine".into(), code: "*#0".into() },
+        ];
+        let mut a = Aprs::new(1, "NINECHARS");
+        a.comment = "x".repeat(24);
+        let named = Aprs::new(2, "");
+        c.aprs = vec![a, named];
+        let mut ch = chan(1, "On aprs", 146_520_000);
+        ch.aprs = 5; // there is no configuration 5
+        c.channels = vec![ch];
+        let m: Vec<String> = validate(&c, None).into_iter().map(|p| p.message).collect();
+        assert!(m.iter().any(|x| x.contains("DTMF contact has no name")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("DTMF code must be")), "{m:?}");
+        assert_eq!(m.iter().filter(|x| x.contains("DTMF code must be")).count(), 1);
+        assert!(m.iter().any(|x| x.contains("longer than 8")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("comment is longer than 23")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("APRS configuration has no name")), "{m:?}");
+        assert!(m.iter().any(|x| x.contains("names APRS configuration 5")), "{m:?}");
     }
 }

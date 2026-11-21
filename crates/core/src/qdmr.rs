@@ -12,7 +12,8 @@
 use crate::fields::parse_tone;
 use crate::model::Codeplug;
 use crate::records::{
-    CallType, Channel, Contact, Mode, RxList, Zone, MAX_CHANNELS, MAX_CONTACTS, MAX_RX_LISTS,
+    Aprs, CallType, Channel, Contact, DtmfContact, Mode, RxList, Zone, APRS_COMMENT_MAX, APRS_NAME_MAX, MAX_APRS,
+    MAX_CHANNELS, MAX_CONTACTS, MAX_DTMF, MAX_RX_LISTS,
     MAX_ZONES,
 };
 use crate::yaml::{parse, stringify, text_of, Value};
@@ -29,6 +30,103 @@ const ALL_CALL_ID: u32 = 0xFF_FFFF;
 /// Power: qdmr's level names and the channel's power byte (open-firmware-cps.md 7.3.3).
 const POWER: [(&str, u8); 5] = [("Min", 1), ("Low", 3), ("Mid", 6), ("High", 9), ("Max", 10)];
 const ALIAS: [&str; 4] = ["None", "APRS", "Text", "Both"];
+/// qdmr's APRS icon names and the symbol each stands for in the primary table (`/`), as qdmr encodes them.
+const ICONS: &[(&str, char)] = &[
+    ("PoliceStation", '!'),
+    ("None", '"'),
+    ("Digipeater", '#'),
+    ("Phone", '$'),
+    ("DXCluster", '%'),
+    ("HFGateway", '&'),
+    ("SmallPlane", '\''),
+    ("MobileSatelliteStation", '('),
+    ("WheelChair", ')'),
+    ("Snowmobile", '*'),
+    ("RedCross", '+'),
+    ("BoyScout", ','),
+    ("Home", '-'),
+    ("X", '.'),
+    ("RedDot", '/'),
+    ("Circle0", '0'),
+    ("Circle1", '1'),
+    ("Circle2", '2'),
+    ("Circle3", '3'),
+    ("Circle4", '4'),
+    ("Circle5", '5'),
+    ("Circle6", '6'),
+    ("Circle7", '7'),
+    ("Circle8", '8'),
+    ("Circle9", '9'),
+    ("Fire", ':'),
+    ("Campground", ';'),
+    ("Motorcycle", '<'),
+    ("RailEngine", '='),
+    ("Car", '>'),
+    ("FileServer", '?'),
+    ("HCFuture", '@'),
+    ("AidStation", 'A'),
+    ("BBS", 'B'),
+    ("Canoe", 'C'),
+    ("Eyeball", 'E'),
+    ("Tractor", 'F'),
+    ("GridSquare", 'G'),
+    ("Hotel", 'H'),
+    ("TCPIP", 'I'),
+    ("School", 'K'),
+    ("Logon", 'L'),
+    ("MacOS", 'M'),
+    ("NTSStation", 'N'),
+    ("Balloon", 'O'),
+    ("PoliceCar", 'P'),
+    ("TBD", 'Q'),
+    ("RV", 'R'),
+    ("Shuttle", 'S'),
+    ("SSTV", 'T'),
+    ("Bus", 'U'),
+    ("ATV", 'V'),
+    ("WXService", 'W'),
+    ("Helo", 'X'),
+    ("Yacht", 'Y'),
+    ("Windows", 'Z'),
+    ("Jogger", '['),
+    ("Triangle", '\\'),
+    ("PBBS", ']'),
+    ("LargePlane", '^'),
+    ("WXStation", '_'),
+    ("DishAntenna", '`'),
+    ("Ambulance", 'a'),
+    ("Bike", 'b'),
+    ("ICP", 'c'),
+    ("FireStation", 'd'),
+    ("Horse", 'e'),
+    ("FireTruck", 'f'),
+    ("Glider", 'g'),
+    ("Hospital", 'h'),
+    ("IOTA", 'i'),
+    ("Jeep", 'j'),
+    ("SmallTruck", 'k'),
+    ("Laptop", 'l'),
+    ("MicE", 'm'),
+    ("Node", 'n'),
+    ("EOC", 'o'),
+    ("Rover", 'p'),
+    ("Grid", 'q'),
+    ("Antenna", 'r'),
+    ("PowerBoat", 's'),
+    ("TruckStop", 't'),
+    ("TruckLarge", 'u'),
+    ("Van", 'v'),
+    ("Water", 'w'),
+    ("XAPRS", 'x'),
+    ("Yagi", 'y'),
+    ("Shelter", 'z'),
+];
+
+/// The icon name for a symbol of the primary table.
+fn icon_of(sym: char) -> Option<&'static str> {
+    ICONS.iter().find(|(_, c)| *c == sym).map(|(n, _)| *n)
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Note {
@@ -38,8 +136,9 @@ pub enum Note {
     ContactType,
     ListCut,
     DmrPositioning,
-    Aprs,
-    Dtmf,
+    PathCut,
+    IconUnknown,
+    AprsPeriod,
     ChannelType,
     BadFrequency,
     TotOff,
@@ -51,9 +150,14 @@ pub enum Note {
     TooManyChannels,
     TooManyContacts,
     TooManyLists,
+    TooManyDtmf,
+    TooManyAprs,
     TooManyZones,
     // export
     LocationRounded,
+    AprsNoChannel,
+    IconExport,
+    AprsFlags,
     Sfr,
     ToneBurst,
     PowerLevel,
@@ -67,8 +171,9 @@ impl Note {
             Note::ContactType => format!("{n} contact(s) of an unknown type were left out."),
             Note::ListCut => format!("{n} RX group list(s) held more than {RX_LIST_CONTACTS} contacts; the rest were left out."),
             Note::DmrPositioning => format!("{n} DMR position reporting setting(s) were left out."),
-            Note::Aprs => format!("{n} APRS system(s) were left out: this editor does not hold APRS yet."),
-            Note::Dtmf => format!("{n} DTMF contact(s) were left out: this editor does not hold them yet."),
+            Note::PathCut => format!("{n} APRS configurations have more than two path entries; the first two were kept."),
+            Note::IconUnknown => format!("{n} APRS icons have no counterpart; the car icon is used instead."),
+            Note::AprsPeriod => format!("{n} APRS beacon periods: the radio sets the period in its own menu."),
             Note::ChannelType => format!("{n} channel(s) of an unknown type were left out."),
             Note::BadFrequency => format!("{n} channel(s) had no usable frequency and were left out."),
             Note::TotOff => format!("{n} channel(s) had the TX timeout off; they use the radio's own."),
@@ -80,8 +185,13 @@ impl Note {
             Note::TooManyChannels => format!("{n} channel(s) did not fit and were left out."),
             Note::TooManyContacts => format!("{n} contact(s) did not fit and were left out."),
             Note::TooManyLists => format!("{n} RX group list(s) did not fit and were left out."),
+            Note::TooManyDtmf => format!("{n} DTMF contacts beyond the 63 the radio holds."),
+            Note::TooManyAprs => format!("{n} APRS configurations beyond the 8 the radio holds."),
             Note::TooManyZones => format!("{n} zone(s) did not fit and were left out."),
             Note::LocationRounded => format!("{n} channel location(s) were rounded to a six-character locator."),
+            Note::AprsNoChannel => format!("{n} APRS frequencies with no FM channel on that frequency to name as the APRS channel."),
+            Note::IconExport => format!("{n} APRS symbols that qdmr has no icon for; they were saved without an icon."),
+            Note::AprsFlags => format!("{n} APRS configurations' silent beacon and position ambiguity settings."),
             Note::Sfr => format!("{n} channel(s) have SFR settings, which a qdmr file can't hold."),
             Note::ToneBurst => format!("{n} channel(s) have a 1750 Hz tone burst, which a qdmr file can't hold."),
             Note::PowerLevel => format!("{n} channel(s) have a power level qdmr has no name for; they were written as the radio's default."),
@@ -103,6 +213,8 @@ pub struct Report {
     pub channels: usize,
     pub contacts: usize,
     pub rx_lists: usize,
+    pub dtmf_contacts: usize,
+    pub aprs: usize,
     pub zones: usize,
     pub notes: Vec<(Note, usize)>,
 }
@@ -417,6 +529,18 @@ fn power_of(name: &str) -> u8 {
 // --- Import ---
 
 /// Replaces the codeplug's tables with a qdmr YAML file's. Nothing is changed if the file can't be read.
+/// A source like `N0CALL-7`: the call sign and an SSID of 0-15 (0 when there is none or it is not one).
+fn call_ssid(v: &str) -> u8 {
+    let up = v.to_uppercase();
+    let mut parts = up.split('-');
+    parts.next();
+    parts
+        .next()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|n| n.fract() == 0.0 && (0.0..=15.0).contains(n))
+        .map_or(0, |n| n as u8)
+}
+
 pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
     let doc = parse(yaml).map_err(|e| format!("That file is not valid YAML: {e}"))?;
     if !doc.is_map()
@@ -468,6 +592,7 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
 
     // Contacts
     let mut contacts: Vec<Contact> = Vec::new();
+    let mut dtmf_contacts: Vec<DtmfContact> = Vec::new();
     let mut contact_by_id: Vec<(String, u16)> = Vec::new();
     for x in list("contacts") {
         let Some((t, v)) = element(x) else { continue };
@@ -503,7 +628,8 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
             contact_by_id.push((text(v.get("id")), number));
             contacts.push(c);
         } else if t == "dtmf" {
-            add(&mut notes, Note::Dtmf, 1);
+            let name = shorten(text(v.get("name")), NAME_MAX, &mut notes);
+            dtmf_contacts.push(DtmfContact { number: 0, name, code: text(v.get("number")).to_uppercase() });
         } else {
             add(&mut notes, Note::ContactType, 1);
         }
@@ -543,13 +669,60 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
         });
     }
 
-    // Positioning: APRS systems have no place in this editor's model yet; DMR position reporting has no counterpart
+    // Positioning: APRS systems become APRS configurations; DMR position reporting has no counterpart
+    let fixed = settings
+        .get("gnss")
+        .filter(|g| g.is_map() && matches!(g.get("fixedPositionEnabled"), Some(Value::Bool(true))))
+        .and_then(|g| from_locator(&text(g.get("fixedPosition"))));
+    let mut aprs: Vec<Aprs> = Vec::new();
+    let mut aprs_by_id: Vec<(String, u8)> = Vec::new();
+    let mut reverts: Vec<(usize, String)> = Vec::new();
     for x in list("positioning") {
-        match element(x) {
-            Some(("aprs", _)) => add(&mut notes, Note::Aprs, 1),
-            Some(_) => add(&mut notes, Note::DmrPositioning, 1),
-            None => {}
+        let Some((t, v)) = element(x) else { continue };
+        if t != "aprs" {
+            add(&mut notes, Note::DmrPositioning, 1);
+            continue;
         }
+        let path: Vec<String> = v
+            .get("path")
+            .map_or(&[][..], Value::as_list)
+            .iter()
+            .map(|p| text(Some(p)).to_uppercase())
+            .collect();
+        if path.len() > 2 {
+            add(&mut notes, Note::PathCut, 1);
+        }
+        let icon_name = text(v.get("icon"));
+        let icon = ICONS.iter().find(|(n, _)| *n == icon_name).map(|(_, c)| *c);
+        if v.get("icon").is_some_and(|i| !matches!(i, Value::Null)) && icon.is_none() {
+            add(&mut notes, Note::IconUnknown, 1);
+        }
+        let empty_o = Value::Map(Vec::new());
+        let o = v
+            .get("opengd77")
+            .filter(|o| o.is_map())
+            .or_else(|| v.get("openGD77").filter(|o| o.is_map()))
+            .unwrap_or(&empty_o);
+        let n = aprs.len() + 1;
+        let apn = if n <= MAX_APRS { n as u8 } else { 0 };
+        let mut a = Aprs::new(apn, "");
+        a.name = shorten(text(v.get("name")), APRS_NAME_MAX, &mut notes);
+        a.ssid = call_ssid(&text(v.get("source")));
+        a.lat = fixed.map_or(0.0, |f| f.0);
+        a.lon = fixed.map_or(0.0, |f| f.1);
+        a.path1 = path.first().cloned().unwrap_or_default();
+        a.path2 = path.get(1).cloned().unwrap_or_default();
+        a.sym_code = icon.filter(|c| *c != '"').unwrap_or('>');
+        a.comment = shorten(text(v.get("message")), APRS_COMMENT_MAX, &mut notes);
+        a.baud300 = number(o.get("baud")) == 300.0;
+        a.use_fixed = fixed.is_some();
+        a.qsy = matches!(o.get("transmitQSY"), Some(Value::Bool(true)));
+        if parse_duration(v.get("period")).is_some_and(|d| d != 0.0) {
+            add(&mut notes, Note::AprsPeriod, 1);
+        }
+        aprs_by_id.push((text(v.get("id")), apn));
+        reverts.push((aprs.len(), text(v.get("revert"))));
+        aprs.push(a);
     }
 
     // Channels
@@ -567,6 +740,7 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
     };
     let mut channels: Vec<Channel> = Vec::new();
     let mut channel_by_id: Vec<(String, u16)> = Vec::new();
+    let mut channel_tx: Vec<(String, u64)> = Vec::new();
     for x in list("channels") {
         let Some((t, v)) = element(x) else { continue };
         let dmr = is_dmr(t);
@@ -668,8 +842,19 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
                 }
             }
         }
+        let aprs_id = text(v.get("aprs"));
+        if let Some((_, n)) = aprs_by_id.iter().rev().find(|(id, _)| *id == aprs_id) {
+            c.aprs = *n;
+        }
         channel_by_id.push((text(v.get("id")), c.number));
+        channel_tx.push((text(v.get("id")), c.tx_hz));
         channels.push(c);
+    }
+    // An APRS configuration's frequency is its revert channel's.
+    for (i, id) in &reverts {
+        if let Some((_, hz)) = channel_tx.iter().rev().find(|(cid, _)| cid == id) {
+            aprs[*i].tx_hz = *hz;
+        }
     }
 
     // Zones: qdmr's A and B lists; a zone with both becomes two, "<name> A" and "<name> B", as qdmr writes them here
@@ -754,6 +939,17 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
         add(&mut notes, Note::TooManyLists, rx_lists.len() - MAX_RX_LISTS);
         rx_lists.truncate(MAX_RX_LISTS);
     }
+    if dtmf_contacts.len() > MAX_DTMF {
+        add(&mut notes, Note::TooManyDtmf, dtmf_contacts.len() - MAX_DTMF);
+        dtmf_contacts.truncate(MAX_DTMF);
+    }
+    if aprs.len() > MAX_APRS {
+        add(&mut notes, Note::TooManyAprs, aprs.len() - MAX_APRS);
+        aprs.truncate(MAX_APRS);
+    }
+    for (i, d) in dtmf_contacts.iter_mut().enumerate() {
+        d.number = (i + 1) as u8;
+    }
     if zones.len() > MAX_ZONES {
         add(&mut notes, Note::TooManyZones, zones.len() - MAX_ZONES);
         zones.truncate(MAX_ZONES);
@@ -765,12 +961,16 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
         channels: channels.len(),
         contacts: contacts.len(),
         rx_lists: rx_lists.len(),
+        dtmf_contacts: dtmf_contacts.len(),
+        aprs: aprs.len(),
         zones: zones.len(),
         notes: Vec::new(),
     };
     cp.channels = channels;
     cp.contacts = contacts;
     cp.rx_lists = rx_lists;
+    cp.dtmf_contacts = dtmf_contacts;
+    cp.aprs = aprs;
     cp.zones = zones;
     // the VFOs keep their frequencies; references into the old tables can't stay
     for v in cp.vfo.iter_mut().flatten() {
@@ -867,7 +1067,7 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
         let i = cp.contacts.iter().position(|c| c.number == n && n != 0)?;
         Some(Value::str(format!("cont{}", i + 1)))
     };
-    let contacts: Vec<Value> = cp
+    let mut contacts: Vec<Value> = cp
         .contacts
         .iter()
         .enumerate()
@@ -910,6 +1110,18 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
         })
         .collect();
 
+    // DTMF contacts follow the digital contacts and continue their id count.
+    for (i, d) in cp.dtmf_contacts.iter().enumerate() {
+        contacts.push(map(vec![(
+            "dtmf",
+            Value::flow(map(vec![
+                ("id", Value::str(format!("cont{}", cp.contacts.len() + i + 1))),
+                ("name", Value::str(d.name.clone())),
+                ("number", Value::str(d.code.clone())),
+            ])),
+        )]));
+    }
+
     let group_lists: Vec<Value> = cp
         .rx_lists
         .iter()
@@ -931,6 +1143,11 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
     let chan_ref = |n: u16| -> Option<String> {
         let i = cp.channels.iter().position(|c| c.number == n && n != 0)?;
         Some(format!("ch{}", i + 1))
+    };
+
+    let aprs_ref = |n: u8| -> Option<Value> {
+        let i = cp.aprs.iter().position(|a| a.number == n && n != 0)?;
+        Some(Value::str(format!("aprs{}", i + 1)))
     };
 
     let channels: Vec<Value> = cp
@@ -1013,6 +1230,9 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
                 if let Some(v) = cref(c.contact) {
                     common.push(("contact", v));
                 }
+                if let Some(v) = aprs_ref(c.aprs) {
+                    common.push(("aprs", v));
+                }
                 if c.roam {
                     common.push(("roaming", default_tag()));
                 }
@@ -1037,6 +1257,9 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
                     "bandwidth",
                     Value::str(if c.bw == 25.0 { "Wide" } else { "Narrow" }),
                 ));
+                if let Some(v) = aprs_ref(c.aprs) {
+                    common.push(("aprs", v));
+                }
                 common.push(("power", power));
                 map(vec![("fm", map(common))])
             }
@@ -1065,6 +1288,64 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
         })
         .collect();
 
+    // APRS: the call comes from the radio name, the revert channel is an FM channel on the configuration's frequency
+    let call: String = {
+        let c: String = g
+            .radio_name
+            .to_uppercase()
+            .chars()
+            .filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            .take(6)
+            .collect();
+        if c.is_empty() { "N0CALL".to_string() } else { c }
+    };
+    let positioning: Vec<Value> = cp
+        .aprs
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let revert = (a.tx_hz != 0)
+                .then(|| cp.channels.iter().position(|c| c.mode == Mode::Fm && c.tx_hz == a.tx_hz))
+                .flatten();
+            if a.tx_hz != 0 && revert.is_none() {
+                add(&mut notes, Note::AprsNoChannel, 1);
+            }
+            let icon = (a.sym_table == '/').then(|| icon_of(a.sym_code)).flatten();
+            if icon.is_none() {
+                add(&mut notes, Note::IconExport, 1);
+            }
+            if a.silent || a.ambiguity != 0 {
+                add(&mut notes, Note::AprsFlags, 1);
+            }
+            let mut f = vec![
+                ("id", Value::str(format!("aprs{}", i + 1))),
+                ("name", Value::str(a.name.clone())),
+            ];
+            if let Some(k) = revert {
+                f.push(("revert", Value::str(format!("ch{}", k + 1))));
+            }
+            f.push(("icon", Value::str(icon.unwrap_or("None"))));
+            f.push(("message", Value::str(a.comment.clone())));
+            f.push((
+                "opengd77",
+                map(vec![
+                    ("transmitQSY", Value::Bool(a.qsy)),
+                    ("baud", Value::Int(if a.baud300 { 300 } else { 1200 })),
+                ]),
+            ));
+            f.push(("destination", Value::str("APN000-0")));
+            f.push(("source", Value::str(format!("{call}-{}", a.ssid))));
+            f.push((
+                "path",
+                Value::flow(Value::List(
+                    [&a.path1, &a.path2].into_iter().filter(|p| !p.is_empty()).map(|p| Value::str(p.clone())).collect(),
+                )),
+            ));
+            map(vec![("aprs", map(f))])
+        })
+        .collect();
+    let fixed_aprs = cp.aprs.iter().find(|a| a.use_fixed);
+
     let mut settings = vec![
         ("defaultID", Value::str("id1")),
         (
@@ -1075,6 +1356,15 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
             ]),
         ),
     ];
+    if let Some(a) = fixed_aprs {
+        settings.push((
+            "gnss",
+            map(vec![
+                ("fixedPositionEnabled", Value::Bool(true)),
+                ("fixedPosition", Value::str(to_locator(a.lat, a.lon))),
+            ]),
+        ));
+    }
     let mut dmr_set = Vec::new();
     if g.private_hang != 0 {
         dmr_set.push((
@@ -1100,7 +1390,7 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
         ("groupLists", Value::List(group_lists)),
         ("channels", Value::List(channels)),
         ("zones", Value::List(zones)),
-        ("positioning", Value::List(Vec::new())),
+        ("positioning", Value::List(positioning)),
     ]);
     (format!("---\n{}...\n", stringify(&doc)), notes)
 }
@@ -1188,8 +1478,10 @@ positioning:
         assert_eq!(cp.rx_lists[0].contacts, vec![1, 2]);
         assert_eq!(cp.zones[0].channels, vec![1, 2]);
         assert_eq!((cp.zones[1].name.as_str(), cp.zones[2].name.as_str()), ("Two A", "Two B"));
-        let notes: Vec<Note> = r.notes.iter().map(|(n, _)| *n).collect();
-        assert!(notes.contains(&Note::Dtmf) && notes.contains(&Note::Aprs));
+        // The DTMF contact and the APRS system come in now.
+        assert_eq!((r.dtmf_contacts, r.aprs), (1, 1));
+        assert_eq!((cp.dtmf_contacts[0].name.as_str(), cp.dtmf_contacts[0].code.as_str()), ("Gate", "123"));
+        assert_eq!((cp.aprs[0].name.as_str(), cp.aprs[0].sym_code), ("APRS", '>'));
     }
 
     #[test]

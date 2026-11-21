@@ -444,3 +444,40 @@ fn a_tier_iii_system_with_a_key_writes_and_a_delete_takes_its_secret_and_records
     let keys: Vec<u16> = area.entries.iter().map(|e| e.key).collect();
     assert!(keys.iter().all(|k| !(0x0100..0x0400).contains(k) && *k != 0x0800 && *k != 0x0900 || (0x0400..0x0800).contains(k)), "{keys:?}");
 }
+
+// --- DTMF contacts and APRS configurations ---
+
+#[test]
+fn dtmf_contacts_and_aprs_configurations_write_only_their_blocks_and_delete_cleanly() {
+    use rfcps_core::records::{Aprs, DtmfContact, APRS_BASE, DTMF_CONTACTS};
+    let (mut radio, base, mut cp) = setup();
+    cp.dtmf_contacts.push(DtmfContact { number: 1, name: "Gate".into(), code: "1234A#*".into() });
+    let mut a = Aprs::new(1, "Mobile");
+    a.ssid = 9;
+    a.path1 = "WIDE1-1".into();
+    a.comment = "A comment".into();
+    a.tx_hz = 144_390_000;
+    a.lat = 37.7749;
+    a.lon = -122.4194;
+    a.use_fixed = true;
+    cp.aprs.push(a);
+    let edited = cp.encode(&base);
+    let report = radio.write_image(&base, &edited, &mut |_, _| {}).unwrap();
+    // The APRS record and the DTMF record are in different 4 KB blocks.
+    let blocks = [APRS_BASE / 4096 * 4096, DTMF_CONTACTS / 4096 * 4096];
+    assert_eq!(report.blocks, 2);
+    assert_eq!(fake(&mut radio).written_blocks, blocks.to_vec());
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert_eq!((now.dtmf_contacts[0].name.as_str(), now.dtmf_contacts[0].code.as_str()), ("Gate", "1234A#*"));
+    assert_eq!((now.aprs[0].name.as_str(), now.aprs[0].path1.as_str(), now.aprs[0].tx_hz), ("Mobile", "WIDE1-1", 144_390_000));
+    assert!(radio.verify(&edited).unwrap().is_empty());
+
+    // Taking them out erases their records.
+    let mut cp = Codeplug::decode(&edited);
+    cp.dtmf_contacts.clear();
+    cp.remove_aprs(1);
+    let gone = cp.encode(&edited);
+    radio.write_image(&edited, &gone, &mut |_, _| {}).unwrap();
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert!(now.dtmf_contacts.is_empty() && now.aprs.is_empty());
+}

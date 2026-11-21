@@ -37,6 +37,17 @@ pub const CONTACT_SIZE: usize = 24;
 pub const LIST_COUNTS: usize = FL + 0x8D620;
 pub const LISTS: usize = FL + 0x8D6A0;
 pub const LIST_SIZE: usize = 80;
+/// DTMF contacts (open-firmware-cps.md 7.3.7): 63 records of 32 bytes. (A 64th would overlap channel bank 0's bitmap.)
+pub const DTMF_CONTACTS: usize = EE + 0x2F88;
+pub const DTMF_SIZE: usize = 0x20;
+pub const MAX_DTMF: usize = 63;
+/// APRS configurations (7.3.8): 8 records of 64 bytes.
+pub const APRS_BASE: usize = EE + 0x1588;
+pub const APRS_SIZE: usize = 0x40;
+pub const MAX_APRS: usize = 8;
+/// The longest an APRS configuration's name and comment can be.
+pub const APRS_NAME_MAX: usize = 8;
+pub const APRS_COMMENT_MAX: usize = 23;
 
 /// Address of a channel bank's in-use bitmap (16 bytes, then 128 records).
 pub fn bank_bitmap(bank: usize) -> usize {
@@ -456,4 +467,310 @@ pub fn encode_general(s: &General, b: &mut [u8]) {
     // The settings area is touched only when a key changed, and never over an area of a newer version. (`put_keys`
     // says so with false; the editor warns about such an area where it knows the image.)
     crate::kv::put_keys(b, &s.keys);
+}
+
+// --- DTMF contacts (7.3.7) ---
+
+const DTMF_DIGITS: &str = "0123456789ABCD*#";
+
+/// A DTMF contact: a name and a code of up to 16 digits (`0`-`9`, `A`-`D`, `*`, `#`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DtmfContact {
+    pub number: u8,
+    pub name: String,
+    pub code: String,
+}
+
+/// Whether `code` is a DTMF code: 1 to 16 of `0`-`9`, `A`-`D`, `*`, `#` (either case).
+pub fn valid_dtmf(code: &str) -> bool {
+    let n = code.chars().count();
+    (1..=16).contains(&n) && code.chars().all(|c| DTMF_DIGITS.contains(c.to_ascii_uppercase()))
+}
+
+/// A record's contact; `None` when it is empty (a first byte of 0xFF or 0x00).
+pub fn decode_dtmf(number: u8, r: &[u8]) -> Option<DtmfContact> {
+    if r[0] == 0xFF || r[0] == 0x00 {
+        return None;
+    }
+    let code: String = r[16..32]
+        .iter()
+        .take_while(|&&b| b < 16)
+        .map(|&b| DTMF_DIGITS.as_bytes()[usize::from(b)] as char)
+        .collect();
+    Some(DtmfContact { number, name: get_name(r, 0, 16), code })
+}
+
+pub fn encode_dtmf(d: &DtmfContact, r: &mut [u8]) {
+    put_name(r, 0, 16, &d.name);
+    r[16..32].fill(0xFF);
+    let mut n = 0;
+    for ch in d.code.to_uppercase().chars() {
+        if let Some(v) = DTMF_DIGITS.find(ch) {
+            if n < 16 {
+                r[16 + n] = v as u8;
+                n += 1;
+            }
+        }
+    }
+}
+
+// --- APRS configurations (7.3.8) ---
+
+const APRS_MAGIC: u16 = 0x4153;
+
+/// An APRS configuration: the sender, a fixed position, the digipeater path, the symbol, a comment, the frequency it
+/// transmits on and the beacon's flags.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Aprs {
+    pub number: u8,
+    pub name: String,
+    pub ssid: u8,
+    pub lat: f64,
+    pub lon: f64,
+    pub path1: String,
+    pub path2: String,
+    pub sym_table: char,
+    pub sym_code: char,
+    pub comment: String,
+    /// 0 = none.
+    pub tx_hz: u64,
+    pub baud300: bool,
+    pub use_fixed: bool,
+    pub qsy: bool,
+    pub silent: bool,
+    /// Position ambiguity, 0-4.
+    pub ambiguity: u8,
+}
+
+impl Aprs {
+    /// A new configuration, as the web editor starts one: symbol `/>` (a car), 1200 baud.
+    pub fn new(number: u8, name: &str) -> Self {
+        Self {
+            number,
+            name: name.to_string(),
+            ssid: 0,
+            lat: 0.0,
+            lon: 0.0,
+            path1: String::new(),
+            path2: String::new(),
+            sym_table: '/',
+            sym_code: '>',
+            comment: String::new(),
+            tx_hz: 0,
+            baud300: false,
+            use_fixed: false,
+            qsy: false,
+            silent: false,
+            ambiguity: 0,
+        }
+    }
+}
+
+fn get_path(r: &[u8], off: usize) -> String {
+    let call = get_name(r, off, 6);
+    let call = call.trim_end_matches(' ');
+    if call.is_empty() {
+        return String::new();
+    }
+    let ssid = r[off + 6];
+    if (1..=15).contains(&ssid) {
+        format!("{call}-{ssid}")
+    } else {
+        call.to_string()
+    }
+}
+
+fn put_path(r: &mut [u8], off: usize, text: &str) {
+    let up = text.to_uppercase();
+    let mut parts = up.split('-');
+    let call = parts.next().unwrap_or("");
+    let ssid = parts.next().map_or(0, |s| s.trim().parse::<u32>().unwrap_or(0));
+    r[off..off + 6].fill(0x20);
+    for (i, ch) in call.chars().take(6).enumerate() {
+        r[off + i] = (u32::from(ch) & 0x7F) as u8;
+    }
+    r[off + 6] = if (1..=15).contains(&ssid) { ssid as u8 } else { 0 };
+}
+
+/// A record's configuration; `None` when it is empty or not an APRS record (the magic is the current or the older one).
+pub fn decode_aprs(number: u8, r: &[u8]) -> Option<Aprs> {
+    let magic = u16le(r, 0x3E);
+    if r[0] == 0xFF || r[0] == 0x00 || (magic != APRS_MAGIC && magic != APRS_MAGIC - 1) {
+        return None;
+    }
+    let flags = r[0x3D];
+    // The older layout (0x4152) has the ambiguity field one bit lower.
+    let amb = if magic == APRS_MAGIC { flags >> 5 } else { (flags >> 4) & 7 };
+    Some(Aprs {
+        number,
+        name: get_name(r, 0, 8),
+        ssid: if r[0x08] <= 15 { r[0x08] } else { 0 },
+        lat: get_coord(r[0x09], r[0x0A], r[0x0B]),
+        lon: get_coord(r[0x0C], r[0x0D], r[0x0E]),
+        path1: get_path(r, 0x0F),
+        path2: get_path(r, 0x16),
+        sym_table: char::from(r[0x1D]),
+        sym_code: char::from(r[0x1E]),
+        comment: get_name(r, 0x1F, 23),
+        tx_hz: get_freq(r, 0x37).unwrap_or(0),
+        baud300: flags & 0x01 != 0,
+        use_fixed: flags & 0x02 != 0,
+        qsy: flags & 0x04 != 0,
+        silent: flags & 0x08 != 0,
+        ambiguity: amb.min(4),
+    })
+}
+
+/// Writes a configuration over the record: only the fields that changed are rewritten (the position, the paths and
+/// the comment), the bytes no field covers stay, and an older record is upgraded to the current layout, as the
+/// firmware does.
+pub fn encode_aprs(a: &Aprs, r: &mut [u8]) {
+    let was = decode_aprs(a.number, r);
+    if was.is_none() {
+        r.fill(0);
+    }
+    put_name(r, 0, 8, &a.name);
+    r[0x08] = a.ssid & 0x0F;
+    if was.as_ref().is_none_or(|w| w.lat != a.lat || w.lon != a.lon) {
+        r[0x09..0x0C].copy_from_slice(&coord_bytes(a.lat));
+        r[0x0C..0x0F].copy_from_slice(&coord_bytes(a.lon));
+    }
+    if was.as_ref().is_none_or(|w| w.path1 != a.path1) {
+        put_path(r, 0x0F, &a.path1);
+    }
+    if was.as_ref().is_none_or(|w| w.path2 != a.path2) {
+        put_path(r, 0x16, &a.path2);
+    }
+    r[0x1D] = (u32::from(a.sym_table) & 0xFF) as u8;
+    r[0x1E] = (u32::from(a.sym_code) & 0xFF) as u8;
+    if was.as_ref().is_none_or(|w| w.comment != a.comment) {
+        put_name(r, 0x1F, 24, &a.comment);
+    }
+    if a.tx_hz != 0 {
+        put_freq(r, 0x37, a.tx_hz);
+    } else {
+        r[0x37..0x3B].fill(0);
+    }
+    r[0x3D] = u8::from(a.baud300)
+        | (u8::from(a.use_fixed) << 1)
+        | (u8::from(a.qsy) << 2)
+        | (u8::from(a.silent) << 3)
+        | ((a.ambiguity & 7) << 5);
+    put16(r, 0x3E, APRS_MAGIC);
+}
+
+/// Two configurations hold the same settings (locations to 0.00005 degree, as the web editor compares them).
+pub fn same_aprs(a: &Aprs, b: &Aprs) -> bool {
+    let mut x = a.clone();
+    x.lat = b.lat;
+    x.lon = b.lon;
+    x == *b && (a.lat - b.lat).abs() < 0.00005 && (a.lon - b.lon).abs() < 0.00005
+}
+
+#[cfg(test)]
+mod aprs_dtmf_tests {
+    use super::*;
+
+    #[test]
+    fn a_dtmf_code_is_one_digit_per_byte_ended_by_ff() {
+        let d = DtmfContact { number: 1, name: "Gate".into(), code: "09AD*#".into() };
+        let mut r = [0u8; DTMF_SIZE];
+        encode_dtmf(&d, &mut r);
+        assert_eq!(&r[16..24], &[0, 9, 10, 13, 14, 15, 0xFF, 0xFF]);
+        assert_eq!(decode_dtmf(1, &r), Some(d));
+        // Lower case is stored as upper case; characters that are not digits are dropped; 16 digits at most.
+        let d = DtmfContact { number: 1, name: "x".into(), code: "ab-1Z2".into() };
+        encode_dtmf(&d, &mut r);
+        assert_eq!(decode_dtmf(1, &r).unwrap().code, "AB12");
+        let long = DtmfContact { number: 1, name: "x".into(), code: "1".repeat(20) };
+        encode_dtmf(&long, &mut r);
+        assert_eq!(decode_dtmf(1, &r).unwrap().code.len(), 16);
+    }
+
+    #[test]
+    fn an_empty_dtmf_record_is_none_and_the_code_check_is_one_to_sixteen() {
+        assert_eq!(decode_dtmf(1, &[0xFF; DTMF_SIZE]), None);
+        assert_eq!(decode_dtmf(1, &[0x00; DTMF_SIZE]), None);
+        for ok in ["1", "a", "0123456789ABCD*#", "*#"] {
+            assert!(valid_dtmf(ok), "{ok}");
+        }
+        for bad in ["", "E", "12 34", "12345678901234567", "1-2"] {
+            assert!(!valid_dtmf(bad), "{bad}");
+        }
+    }
+
+    fn sample() -> Aprs {
+        let mut a = Aprs::new(3, "Mobile");
+        a.ssid = 9;
+        a.lat = 37.7749;
+        a.lon = -122.4194;
+        a.path1 = "WIDE1-1".into();
+        a.path2 = "WIDE2".into();
+        a.comment = "A comment".into();
+        a.tx_hz = 144_390_000;
+        a.qsy = true;
+        a.ambiguity = 4;
+        a
+    }
+
+    #[test]
+    fn an_aprs_configuration_round_trips() {
+        let a = sample();
+        let mut r = [0xFFu8; APRS_SIZE];
+        encode_aprs(&a, &mut r);
+        let back = decode_aprs(3, &r).unwrap();
+        assert_eq!(back.name, "Mobile");
+        assert_eq!((back.path1.as_str(), back.path2.as_str()), ("WIDE1-1", "WIDE2"));
+        assert_eq!((back.sym_table, back.sym_code), ('/', '>'));
+        assert!(same_aprs(&back, &a), "{back:?}");
+        // The record always carries the current magic.
+        assert_eq!(u16::from_le_bytes([r[0x3E], r[0x3F]]), 0x4153);
+    }
+
+    #[test]
+    fn a_path_keeps_its_callsign_and_only_an_ssid_from_1_to_15() {
+        let mut r = [0u8; APRS_SIZE];
+        put_path(&mut r, 0x0F, "wide2-2");
+        assert_eq!(get_path(&r, 0x0F), "WIDE2-2");
+        put_path(&mut r, 0x0F, "relay-0");
+        assert_eq!(get_path(&r, 0x0F), "RELAY");
+        put_path(&mut r, 0x0F, "relay-16");
+        assert_eq!(get_path(&r, 0x0F), "RELAY");
+        put_path(&mut r, 0x0F, "");
+        assert_eq!(get_path(&r, 0x0F), "");
+        // A callsign longer than 6 is cut.
+        put_path(&mut r, 0x0F, "TOOLONGCALL-3");
+        assert_eq!(get_path(&r, 0x0F), "TOOLON-3");
+    }
+
+    #[test]
+    fn the_ambiguity_field_is_read_where_the_layout_puts_it_and_clamped_to_4() {
+        let mut r = [0u8; APRS_SIZE];
+        encode_aprs(&sample(), &mut r);
+        r[0x3D] = 7 << 5; // the current layout
+        assert_eq!(decode_aprs(3, &r).unwrap().ambiguity, 4);
+        r[0x3E..0x40].copy_from_slice(&0x4152u16.to_le_bytes());
+        r[0x3D] = 3 << 4; // the older layout, one bit lower
+        assert_eq!(decode_aprs(3, &r).unwrap().ambiguity, 3);
+        // Not an APRS record: another magic, or an empty first byte.
+        r[0x3E] = 0;
+        assert_eq!(decode_aprs(3, &r), None);
+    }
+
+    #[test]
+    fn an_older_record_is_upgraded_only_when_it_is_rewritten() {
+        let a = sample();
+        let mut r = [0u8; APRS_SIZE];
+        encode_aprs(&a, &mut r);
+        r[0x3E..0x40].copy_from_slice(&0x4152u16.to_le_bytes());
+        r[0x3D] = (3 << 4) | 0x04;
+        let was = decode_aprs(3, &r).unwrap();
+        // Nothing changed: the model leaves the record alone (same_aprs), so it stays in the older layout.
+        assert!(same_aprs(&was, &decode_aprs(3, &r).unwrap()));
+        let mut changed = was.clone();
+        changed.comment = "New".into();
+        encode_aprs(&changed, &mut r);
+        assert_eq!(u16::from_le_bytes([r[0x3E], r[0x3F]]), 0x4153);
+        assert_eq!(decode_aprs(3, &r).unwrap().ambiguity, 3, "the ambiguity is kept");
+    }
 }

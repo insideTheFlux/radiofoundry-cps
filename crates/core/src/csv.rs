@@ -10,7 +10,8 @@
 use crate::fields::parse_tone;
 use crate::model::Codeplug;
 use crate::records::{
-    CallType, Channel, Contact, Mode, RxList, Zone, MAX_CHANNELS, MAX_CONTACTS, MAX_RX_LISTS,
+    valid_dtmf, Aprs, CallType, Channel, Contact, DtmfContact, Mode, RxList, Zone, APRS_COMMENT_MAX, APRS_NAME_MAX,
+    MAX_APRS, MAX_CHANNELS, MAX_CONTACTS, MAX_DTMF, MAX_RX_LISTS,
 };
 
 // --- RFC 4180 ---
@@ -344,14 +345,18 @@ fn find_refs(
 pub enum TableKind {
     Contacts,
     RxLists,
+    Dtmf,
+    Aprs,
     Channels,
     Zones,
 }
 
 /// Import order: what a table refers to comes first.
-pub const ORDER: [TableKind; 4] = [
+pub const ORDER: [TableKind; 6] = [
     TableKind::Contacts,
     TableKind::RxLists,
+    TableKind::Dtmf,
+    TableKind::Aprs,
     TableKind::Channels,
     TableKind::Zones,
 ];
@@ -361,6 +366,8 @@ impl TableKind {
         match self {
             TableKind::Contacts => "contacts.csv",
             TableKind::RxLists => "rx-group-lists.csv",
+            TableKind::Dtmf => "dtmf-contacts.csv",
+            TableKind::Aprs => "aprs.csv",
             TableKind::Channels => "channels.csv",
             TableKind::Zones => "zones.csv",
         }
@@ -370,6 +377,8 @@ impl TableKind {
         match self {
             TableKind::Contacts => "Contacts",
             TableKind::RxLists => "RX group lists",
+            TableKind::Dtmf => "DTMF contacts",
+            TableKind::Aprs => "APRS configurations",
             TableKind::Channels => "Channels",
             TableKind::Zones => "Zones",
         }
@@ -379,6 +388,8 @@ impl TableKind {
         match self {
             TableKind::Contacts => &["name", "id"],
             TableKind::RxLists => &["name", "contacts"],
+            TableKind::Dtmf => &["name", "code"],
+            TableKind::Aprs => &["name"],
             TableKind::Channels => &["name", "rxHz"],
             TableKind::Zones => &["name", "channels"],
         }
@@ -416,6 +427,29 @@ const LIST_COLS: &[Col] = &[
     NUMBER,
     col("Name", "name", &["Group List", "RX Group List"]),
     col("Contacts", "contacts", &["Members", "Talkgroups"]),
+];
+const DTMF_COLS: &[Col] = &[
+    NUMBER,
+    col("Name", "name", &[]),
+    col("Code", "code", &["DTMF", "DTMF Code", "Number String"]),
+];
+const APRS_COLS: &[Col] = &[
+    NUMBER,
+    col("Name", "name", &[]),
+    col("SSID", "ssid", &[]),
+    col("Path 1", "path1", &["Path1"]),
+    col("Path 2", "path2", &["Path2"]),
+    col("Symbol Table", "symTable", &[]),
+    col("Symbol", "symCode", &["Symbol Code"]),
+    col("Comment", "comment", &[]),
+    col("TX Frequency (MHz)", "txHz", &["TX Frequency", "Frequency"]),
+    col("300 Baud", "baud300", &[]),
+    col("Fixed Position", "useFixed", &["Use Fixed Position"]),
+    col("Latitude", "lat", &[]),
+    col("Longitude", "lon", &[]),
+    col("QSY", "qsy", &[]),
+    col("Silent", "silent", &[]),
+    col("Ambiguity", "ambiguity", &["Position Ambiguity"]),
 ];
 const ZONE_COLS: &[Col] = &[
     col("Name", "name", &["Zone Name", "Zone"]),
@@ -470,6 +504,8 @@ fn columns(t: TableKind) -> &'static [Col] {
     match t {
         TableKind::Contacts => CONTACT_COLS,
         TableKind::RxLists => LIST_COLS,
+        TableKind::Dtmf => DTMF_COLS,
+        TableKind::Aprs => APRS_COLS,
         TableKind::Channels => CHANNEL_COLS,
         TableKind::Zones => ZONE_COLS,
     }
@@ -487,6 +523,9 @@ fn pool_lists(cp: &Codeplug) -> Vec<(u16, String)> {
         .map(|l| (u16::from(l.number), l.name.clone()))
         .collect()
 }
+fn pool_aprs(cp: &Codeplug) -> Vec<(u16, String)> {
+    cp.aprs.iter().map(|a| (u16::from(a.number), a.name.clone())).collect()
+}
 fn pool_channels(cp: &Codeplug) -> Vec<(u16, String)> {
     cp.channels
         .iter()
@@ -502,7 +541,8 @@ pub fn export_table(cp: &Codeplug, t: TableKind) -> String {
         .iter()
         .map(|c| c.header.to_string())
         .collect::<Vec<_>>()];
-    let (contacts, lists, channels) = (pool_contacts(cp), pool_lists(cp), pool_channels(cp));
+    let (contacts, lists, channels, aprs) =
+        (pool_contacts(cp), pool_lists(cp), pool_channels(cp), pool_aprs(cp));
     match t {
         TableKind::Contacts => {
             for r in &cp.contacts {
@@ -538,6 +578,33 @@ pub fn export_table(cp: &Codeplug, t: TableKind) -> String {
                 rows.push(vec![z.name.clone(), refs_text(&z.channels, &channels)]);
             }
         }
+        TableKind::Dtmf => {
+            for d in &cp.dtmf_contacts {
+                rows.push(vec![d.number.to_string(), d.name.clone(), d.code.clone()]);
+            }
+        }
+        TableKind::Aprs => {
+            for a in &cp.aprs {
+                rows.push(vec![
+                    a.number.to_string(),
+                    a.name.clone(),
+                    a.ssid.to_string(),
+                    a.path1.clone(),
+                    a.path2.clone(),
+                    a.sym_table.to_string(),
+                    a.sym_code.to_string(),
+                    a.comment.clone(),
+                    if a.tx_hz == 0 { String::new() } else { mhz(a.tx_hz) },
+                    yes_no(a.baud300),
+                    yes_no(a.use_fixed),
+                    coord_text(a.lat),
+                    coord_text(a.lon),
+                    yes_no(a.qsy),
+                    yes_no(a.silent),
+                    a.ambiguity.to_string(),
+                ]);
+            }
+        }
         TableKind::Channels => {
             let one = |n: u16, pool: &[(u16, String)]| -> String {
                 if n == 0 {
@@ -569,11 +636,7 @@ pub fn export_table(cp: &Codeplug, t: TableKind) -> String {
                     c.timeslot.to_string(),
                     one(c.contact, &contacts),
                     one(u16::from(c.rx_list), &lists),
-                    if c.aprs == 0 {
-                        String::new()
-                    } else {
-                        format!("#{}", c.aprs)
-                    },
+                    one(u16::from(c.aprs), &aprs),
                     if c.dmr_id == 0 {
                         String::new()
                     } else {
@@ -692,7 +755,6 @@ fn set_channel(
     key: &str,
     s: &str,
     cp: &Codeplug,
-    notes: &mut Vec<String>,
 ) -> Result<(), Bad> {
     match key {
         "name" => c.name = as_name(s, 16, true)?,
@@ -723,17 +785,7 @@ fn set_channel(
         "timeslot" => c.timeslot = as_int(s, 1, 2, Some(1))? as u8,
         "contact" => c.contact = find_ref(s, &pool_contacts(cp))?.unwrap_or(0),
         "rxList" => c.rx_list = find_ref(s, &pool_lists(cp))?.map_or(0, |n| n as u8),
-        "aprs" => {
-            let t = s.trim();
-            c.aprs = if t.is_empty() {
-                0
-            } else if let Some(n) = t.strip_prefix('#').and_then(|r| r.parse::<u8>().ok()) {
-                n
-            } else {
-                notes.push(format!("APRS configuration \"{t}\" is not imported"));
-                0
-            };
-        }
+        "aprs" => c.aprs = find_ref(s, &pool_aprs(cp))?.map_or(0, |n| n as u8),
         "dmrId" => c.dmr_id = as_id(s)?,
         "rxOnly" => c.rx_only = as_bool(s)?,
         "allSkip" => c.all_skip = as_bool(s)?,
@@ -1055,6 +1107,8 @@ pub fn import_table(
                 unknown,
             })
         }
+        TableKind::Dtmf => import_dtmf(cp, &rows, &found, has_number, unknown),
+        TableKind::Aprs => import_aprs(cp, &rows, &found, has_number, unknown),
         TableKind::Channels => {
             let old = cp.channels.clone();
             let mut taken = vec![false; old.len()];
@@ -1103,17 +1157,7 @@ pub fn import_table(
                         }
                         continue;
                     }
-                    let mut notes = Vec::new();
-                    let r = set_channel(&mut work, c.key, s, &snapshot, &mut notes);
-                    for m in notes {
-                        problems.push(CsvProblem {
-                            row: i + 1,
-                            column: c.header.into(),
-                            message: m,
-                            skipped: false,
-                        });
-                    }
-                    if let Err(e) = r {
+                    if let Err(e) = set_channel(&mut work, c.key, s, &snapshot) {
                         let lost = fresh && t.required().contains(&c.key);
                         problems.push(CsvProblem {
                             row: i + 1,
@@ -1285,6 +1329,259 @@ pub fn import_table(
 }
 
 /// Rows the file numbered twice keep the first; the rest, and rows without a number, get free numbers.
+/// How one row of a table matches a record already there: by its number, else by its name.
+fn match_row(
+    old_numbers: &[u16],
+    old_names: &[&str],
+    taken: &[bool],
+    n_text: &str,
+    name_text: &str,
+) -> Option<usize> {
+    (!n_text.is_empty())
+        .then(|| old_numbers.iter().enumerate().position(|(k, n)| !taken[k] && n.to_string() == n_text))
+        .flatten()
+        .or_else(|| {
+            (!name_text.is_empty())
+                .then(|| old_names.iter().enumerate().position(|(k, x)| !taken[k] && *x == name_text))
+                .flatten()
+        })
+}
+
+/// A path: up to six letters or digits and an SSID of 0-15, upper case.
+fn as_path(s: &str) -> Result<String, Bad> {
+    let t = s.trim().to_uppercase();
+    if t.is_empty() {
+        return Ok(t);
+    }
+    let (call, ssid) = t.split_once('-').map_or((t.as_str(), None), |(c, d)| (c, Some(d)));
+    let ok = (1..=6).contains(&call.chars().count())
+        && call.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && ssid.is_none_or(|d| d.parse::<u8>().is_ok_and(|v| v <= 15) && !d.starts_with('+') && d.chars().all(|c| c.is_ascii_digit()));
+    if ok {
+        Ok(t)
+    } else {
+        bad("not a path like WIDE1-1")
+    }
+}
+
+/// One printable character (a symbol), or `blank` when the cell is empty.
+fn as_char(s: &str, blank: char) -> Result<char, Bad> {
+    let v = s.trim();
+    let mut it = v.chars();
+    match (it.next(), it.next()) {
+        (None, _) => Ok(blank),
+        (Some(c), None) if u32::from(c) <= 0x7E => Ok(c),
+        _ => bad("not one character"),
+    }
+}
+
+fn set_dtmf(d: &mut DtmfContact, key: &str, s: &str) -> Result<(), Bad> {
+    match key {
+        "name" => d.name = as_name(s, 16, true)?,
+        "code" => {
+            let c = s.trim().to_uppercase();
+            if !valid_dtmf(&c) {
+                return bad("not a DTMF code (1 to 16 of 0-9, A-D, *, #)");
+            }
+            d.code = c;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn set_aprs(a: &mut Aprs, key: &str, s: &str) -> Result<(), Bad> {
+    match key {
+        "name" => a.name = as_name(s, APRS_NAME_MAX, true)?,
+        "ssid" => a.ssid = as_int(s, 0, 15, Some(0))? as u8,
+        "path1" => a.path1 = as_path(s)?,
+        "path2" => a.path2 = as_path(s)?,
+        "symTable" => a.sym_table = as_char(s, '/')?,
+        "symCode" => a.sym_code = as_char(s, '>')?,
+        "comment" => a.comment = as_name(s, APRS_COMMENT_MAX, false)?,
+        "txHz" => a.tx_hz = as_freq(s, Some(0))?,
+        "baud300" => a.baud300 = as_bool(s)?,
+        "useFixed" => a.use_fixed = as_bool(s)?,
+        "lat" => a.lat = as_num(s, -90.0, 90.0)?,
+        "lon" => a.lon = as_num(s, -180.0, 180.0)?,
+        "qsy" => a.qsy = as_bool(s)?,
+        "silent" => a.silent = as_bool(s)?,
+        "ambiguity" => a.ambiguity = as_int(s, 0, 4, Some(0))? as u8,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The rows of a table with a number and a name, matched to the records there and set from their cells. Returns the
+/// records, which of the old ones a row took, and how many rows added and updated.
+#[allow(clippy::too_many_arguments)]
+fn import_rows<T: Clone>(
+    t: TableKind,
+    rows: &[Vec<String>],
+    found: &[(&'static Col, usize)],
+    has_number: bool,
+    old: &[T],
+    number_of: impl Fn(&T) -> u16,
+    name_of: impl Fn(&T) -> String,
+    fresh_record: impl Fn() -> T,
+    set_number: impl Fn(&mut T, u16),
+    set: impl Fn(&mut T, &str, &str) -> Result<(), Bad>,
+    max: usize,
+    problems: &mut Vec<CsvProblem>,
+) -> (Vec<T>, Vec<bool>, usize, usize) {
+    let numbers: Vec<u16> = old.iter().map(&number_of).collect();
+    let names: Vec<String> = old.iter().map(&name_of).collect();
+    let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut taken = vec![false; old.len()];
+    let mut out: Vec<T> = Vec::new();
+    let (mut added, mut updated) = (0, 0);
+    'rows: for (i, row) in rows.iter().enumerate().skip(1) {
+        if row.iter().all(|v| v.trim().is_empty()) {
+            continue;
+        }
+        let cell = |key: &str| {
+            found.iter().find(|(c, _)| c.key == key).map(|(_, ix)| row.get(*ix).map_or("", |s| s.as_str()))
+        };
+        let n_text = if has_number { cell("number").unwrap_or("").trim().to_string() } else { String::new() };
+        let name_text = cell("name").unwrap_or("").trim().to_string();
+        let idx = match_row(&numbers, &name_refs, &taken, &n_text, &name_text);
+        let fresh = idx.is_none();
+        let mut work = match idx {
+            Some(k) => {
+                taken[k] = true;
+                old[k].clone()
+            }
+            None => fresh_record(),
+        };
+        let mut skip = false;
+        for (c, ix) in found {
+            let s = row.get(*ix).map_or("", |s| s.as_str());
+            if c.key == "number" {
+                match as_int(s, 1, max as i64, None) {
+                    Ok(n) => set_number(&mut work, n as u16),
+                    Err(e) if fresh && !n_text.is_empty() => problems.push(CsvProblem {
+                        row: i + 1,
+                        column: c.header.into(),
+                        message: e.0,
+                        skipped: false,
+                    }),
+                    Err(_) => {}
+                }
+                continue;
+            }
+            if let Err(e) = set(&mut work, c.key, s) {
+                let lost = fresh && t.required().contains(&c.key);
+                problems.push(CsvProblem { row: i + 1, column: c.header.into(), message: e.0, skipped: lost });
+                skip |= lost;
+            }
+        }
+        if skip {
+            continue 'rows;
+        }
+        if name_of(&work).is_empty() {
+            problems.push(CsvProblem { row: i + 1, column: "Name".into(), message: "no name".into(), skipped: true });
+            continue;
+        }
+        if fresh {
+            added += 1;
+        } else {
+            updated += 1;
+        }
+        out.push(work);
+    }
+    (out, taken, added, updated)
+}
+
+fn import_dtmf(
+    cp: &mut Codeplug,
+    rows: &[Vec<String>],
+    found: &[(&'static Col, usize)],
+    has_number: bool,
+    unknown: Vec<String>,
+) -> Result<ImportResult, String> {
+    let mut problems = Vec::new();
+    let old = cp.dtmf_contacts.clone();
+    let (mut out, taken, added, updated) = import_rows(
+        TableKind::Dtmf,
+        rows,
+        found,
+        has_number,
+        &old,
+        |d: &DtmfContact| u16::from(d.number),
+        |d| d.name.clone(),
+        || DtmfContact { number: 0, name: String::new(), code: String::new() },
+        |d, n| d.number = n as u8,
+        set_dtmf,
+        MAX_DTMF,
+        &mut problems,
+    );
+    let mut nums: Vec<u16> = out.iter().map(|d| u16::from(d.number)).collect();
+    assign_numbers(&mut nums.iter_mut().collect::<Vec<_>>(), MAX_DTMF as u16);
+    for (d, n) in out.iter_mut().zip(nums) {
+        d.number = n as u8;
+    }
+    let removed = taken.iter().filter(|t| !**t).count();
+    cp.dtmf_contacts = out;
+    if cp.dtmf_contacts.len() > MAX_DTMF {
+        problems.push(CsvProblem {
+            row: 0,
+            column: String::new(),
+            message: format!("{} DTMF contacts; the most is {MAX_DTMF}", cp.dtmf_contacts.len()),
+            skipped: false,
+        });
+    }
+    Ok(ImportResult { table: TableKind::Dtmf, added, updated, removed, problems, unknown })
+}
+
+fn import_aprs(
+    cp: &mut Codeplug,
+    rows: &[Vec<String>],
+    found: &[(&'static Col, usize)],
+    has_number: bool,
+    unknown: Vec<String>,
+) -> Result<ImportResult, String> {
+    let mut problems = Vec::new();
+    let old = cp.aprs.clone();
+    let (mut out, taken, added, updated) = import_rows(
+        TableKind::Aprs,
+        rows,
+        found,
+        has_number,
+        &old,
+        |a: &Aprs| u16::from(a.number),
+        |a| a.name.clone(),
+        || Aprs::new(0, ""),
+        |a, n| a.number = n as u8,
+        set_aprs,
+        MAX_APRS,
+        &mut problems,
+    );
+    let mut nums: Vec<u16> = out.iter().map(|a| u16::from(a.number)).collect();
+    assign_numbers(&mut nums.iter_mut().collect::<Vec<_>>(), MAX_APRS as u16);
+    for (a, n) in out.iter_mut().zip(nums) {
+        a.number = n as u8;
+    }
+    let gone: Vec<u8> = old.iter().enumerate().filter(|(k, _)| !taken[*k]).map(|(_, a)| a.number).collect();
+    cp.aprs = out;
+    // A configuration that went takes its place on a channel with it.
+    for n in &gone {
+        for c in cp.channels.iter_mut().chain(cp.vfo.iter_mut().flatten()) {
+            if c.aprs == *n {
+                c.aprs = 0;
+            }
+        }
+    }
+    if cp.aprs.len() > MAX_APRS {
+        problems.push(CsvProblem {
+            row: 0,
+            column: String::new(),
+            message: format!("{} APRS configurations; the most is {MAX_APRS}", cp.aprs.len()),
+            skipped: false,
+        });
+    }
+    Ok(ImportResult { table: TableKind::Aprs, added, updated, removed: gone.len(), problems, unknown })
+}
+
 fn assign_numbers(nums: &mut [&mut u16], max: u16) {
     let mut used = std::collections::HashSet::new();
     let mut need: Vec<usize> = Vec::new();
@@ -1545,5 +1842,76 @@ mod tests {
     fn a_file_that_is_no_table_is_refused() {
         let mut cp = sample();
         assert!(import_table(&mut cp, "foo,bar\n1,2\n", None).is_err());
+    }
+
+    fn aprs_dtmf_codeplug() -> Codeplug {
+        use crate::records::{Aprs, DtmfContact};
+        let mut cp = Codeplug::decode(&crate::Image::blank());
+        cp.dtmf_contacts.push(DtmfContact { number: 1, name: "Home Gate".into(), code: "1234A#*".into() });
+        cp.dtmf_contacts.push(DtmfContact { number: 5, name: "Other".into(), code: "9".into() });
+        let mut a = Aprs::new(1, "Mobile");
+        a.ssid = 9;
+        a.lat = 37.7749;
+        a.lon = -122.4194;
+        a.path1 = "WIDE1-1".into();
+        a.comment = "A comment".into();
+        a.tx_hz = 144_390_000;
+        a.use_fixed = true;
+        a.ambiguity = 2;
+        let mut b = Aprs::new(2, "Fixed");
+        b.sym_table = '\\';
+        b.sym_code = '-';
+        b.silent = true;
+        cp.aprs = vec![a, b];
+        let mut c = Channel::new(1, 144_390_000, 144_390_000);
+        c.name = "APRS 2m".into();
+        c.aprs = 2;
+        cp.channels.push(c);
+        cp
+    }
+
+    #[test]
+    fn dtmf_contacts_and_aprs_configurations_round_trip_through_their_csv_files() {
+        let cp = aprs_dtmf_codeplug();
+        let mut back = Codeplug::decode(&crate::Image::blank());
+        for (file, text) in export_all(&cp) {
+            let t = detect(&text).unwrap_or_else(|| panic!("{file} is not recognized"));
+            let r = import_table(&mut back, &text, Some(t)).unwrap();
+            assert!(r.problems.is_empty(), "{file}: {:?}", r.problems);
+        }
+        assert_eq!(back.dtmf_contacts, cp.dtmf_contacts);
+        assert_eq!(back.aprs.len(), 2);
+        for (a, b) in back.aprs.iter().zip(&cp.aprs) {
+            assert!(crate::records::same_aprs(a, b), "{a:?} vs {b:?}");
+        }
+        // The channel finds its configuration by name.
+        assert_eq!(back.channels[0].aprs, 2);
+    }
+
+    #[test]
+    fn a_dtmf_table_is_recognized_and_a_bad_code_skips_the_row() {
+        let text = "Number,Name,Code\n1,Good,12AB\n2,Bad,12E4\n3,Lower,*#ab\n";
+        assert_eq!(detect(text), Some(TableKind::Dtmf));
+        let mut cp = Codeplug::decode(&crate::Image::blank());
+        let r = import_table(&mut cp, text, None).unwrap();
+        assert_eq!((r.added, r.problems.len()), (2, 1));
+        assert!(r.problems[0].skipped && r.problems[0].message.contains("DTMF"));
+        assert_eq!(cp.dtmf_contacts.len(), 2);
+        assert_eq!(cp.dtmf_contacts[1].code, "*#AB");
+    }
+
+    #[test]
+    fn aprs_paths_symbols_and_limits_are_checked_and_a_removed_row_clears_the_channel() {
+        let mut cp = aprs_dtmf_codeplug();
+        let text = "Name,SSID,Path 1,Symbol,Comment\nNew,3,TOO LONG PATH,>,c\nOK,4,wide2-2,k,\n";
+        let r = import_table(&mut cp, text, Some(TableKind::Aprs)).unwrap();
+        // Both old ones went (the file names neither). A bad path is a problem, but only a bad required cell (the name)
+        // skips a row, so the row stays with an empty path.
+        assert_eq!(r.removed, 2);
+        assert!(r.problems.iter().any(|p| p.column == "Path 1" && !p.skipped), "{:?}", r.problems);
+        assert_eq!(cp.aprs.len(), 2);
+        assert_eq!((cp.aprs[0].name.as_str(), cp.aprs[0].path1.as_str()), ("New", ""));
+        assert_eq!((cp.aprs[1].name.as_str(), cp.aprs[1].path1.as_str(), cp.aprs[1].sym_code), ("OK", "WIDE2-2", 'k'));
+        assert_eq!(cp.channels[0].aprs, 0, "the channel's configuration went");
     }
 }

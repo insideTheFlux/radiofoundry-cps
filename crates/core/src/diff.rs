@@ -55,6 +55,7 @@ fn channel_fields(a: &Channel, b: &Channel) -> Vec<&'static str> {
     chk(a.timeslot != b.timeslot, "timeslot");
     chk(a.contact != b.contact, "contact");
     chk(a.rx_list != b.rx_list, "RX group list");
+    chk(a.aprs != b.aprs, "APRS configuration");
     chk(
         a.dmr_id != b.dmr_id || a.dmo != b.dmo,
         "DMR ID or direct mode",
@@ -247,6 +248,30 @@ pub fn changes(old: &Codeplug, new: &Codeplug) -> Vec<Change> {
             });
         }
     }
+    for n in &new.dtmf_contacts {
+        match old.dtmf_contacts.iter().find(|o| o.number == n.number) {
+            None => out.push(Change { table: Table::Dtmf, kind: Kind::Added, number: Some(u16::from(n.number)), name: n.name.clone(), detail: String::new() }),
+            Some(o) if o != n => out.push(Change { table: Table::Dtmf, kind: Kind::Changed, number: Some(u16::from(n.number)), name: n.name.clone(), detail: String::new() }),
+            _ => {}
+        }
+    }
+    for o in &old.dtmf_contacts {
+        if !new.dtmf_contacts.iter().any(|n| n.number == o.number) {
+            out.push(Change { table: Table::Dtmf, kind: Kind::Removed, number: Some(u16::from(o.number)), name: o.name.clone(), detail: String::new() });
+        }
+    }
+    for n in &new.aprs {
+        match old.aprs.iter().find(|o| o.number == n.number) {
+            None => out.push(Change { table: Table::Aprs, kind: Kind::Added, number: Some(u16::from(n.number)), name: n.name.clone(), detail: String::new() }),
+            Some(o) if !crate::records::same_aprs(o, n) => out.push(Change { table: Table::Aprs, kind: Kind::Changed, number: Some(u16::from(n.number)), name: n.name.clone(), detail: String::new() }),
+            _ => {}
+        }
+    }
+    for o in &old.aprs {
+        if !new.aprs.iter().any(|n| n.number == o.number) {
+            out.push(Change { table: Table::Aprs, kind: Kind::Removed, number: Some(u16::from(o.number)), name: o.name.clone(), detail: String::new() });
+        }
+    }
     for n in &new.systems {
         match old.systems.iter().find(|o| o.number == n.number) {
             None => out.push(Change {
@@ -393,5 +418,27 @@ mod tests {
         assert_eq!(ch[0].detail, "transmit side on");
         let ch = changes(&b, &a);
         assert!(ch.iter().any(|c| c.table == Table::Systems && c.kind == Kind::Removed));
+    }
+
+    #[test]
+    fn dtmf_and_aprs_are_added_changed_and_removed() {
+        use crate::records::{Aprs, DtmfContact};
+        let (a, mut b) = two();
+        b.dtmf_contacts.push(DtmfContact { number: 1, name: "Gate".into(), code: "123".into() });
+        b.aprs.push(Aprs::new(1, "Mobile"));
+        let ch = changes(&a, &b);
+        assert!(ch.iter().any(|c| c.table == Table::Dtmf && c.kind == Kind::Added));
+        assert!(ch.iter().any(|c| c.table == Table::Aprs && c.kind == Kind::Added));
+        let mut c = b.clone();
+        c.dtmf_contacts[0].code = "456".into();
+        c.aprs[0].comment = "x".into();
+        c.channels[0].aprs = 1;
+        let ch = changes(&b, &c);
+        assert!(ch.iter().any(|x| x.table == Table::Dtmf && x.kind == Kind::Changed));
+        assert!(ch.iter().any(|x| x.table == Table::Aprs && x.kind == Kind::Changed));
+        assert!(ch.iter().any(|x| x.table == Table::Channels && x.detail.contains("APRS configuration")));
+        let ch = changes(&c, &a);
+        assert!(ch.iter().any(|x| x.table == Table::Dtmf && x.kind == Kind::Removed));
+        assert!(ch.iter().any(|x| x.table == Table::Aprs && x.kind == Kind::Removed));
     }
 }
