@@ -9,6 +9,7 @@ mod contacts;
 mod doc;
 mod exchange;
 mod general;
+mod iddbtab;
 mod lists;
 mod aprs;
 mod dtmf;
@@ -36,6 +37,7 @@ enum Tab {
     Channels,
     Zones,
     Contacts,
+    IdDb,
     Lists,
     Dtmf,
     Aprs,
@@ -55,6 +57,7 @@ struct App {
     zone: usize,
     channel: Option<u16>,
     contact: Option<u16>,
+    iddb: iddbtab::IdDbUi,
     list: usize,
     /// The selected system's number (the Systems tab).
     system: Option<u16>,
@@ -98,6 +101,7 @@ impl App {
             zone: 0,
             channel: None,
             contact: None,
+            iddb: iddbtab::IdDbUi::default(),
             list: 0,
             system: None,
             dtmf: None,
@@ -434,7 +438,7 @@ impl App {
                 self.start_read(&ui.ctx().clone());
             }
             let errors = problems::error_count(&self.problems);
-            let dirty = self.doc.as_mut().is_some_and(|d| d.dirty() || d.from_file);
+            let dirty = self.doc.as_mut().is_some_and(|d| d.dirty() || d.from_file || d.iddb_pending);
             let can_write = self.doc.is_some()
                 && errors == 0
                 && dirty
@@ -913,6 +917,11 @@ impl eframe::App for App {
                 );
                 ui.selectable_value(
                     &mut self.tab,
+                    Tab::IdDb,
+                    format!("ID Database{}", cp.iddb.as_ref().map_or(String::new(), |h| format!("  {}", h.count))),
+                );
+                ui.selectable_value(
+                    &mut self.tab,
                     Tab::Lists,
                     format!("RX Group Lists  {}", cp.rx_lists.len()),
                 );
@@ -931,10 +940,12 @@ impl eframe::App for App {
             });
             ui.separator();
             let before = doc.cp.clone();
+            let gen_before = doc.generation;
             match self.tab {
                 Tab::Channels => channels::show(ui, &mut doc.cp, &mut self.channel),
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
                 Tab::Contacts => contacts::show(ui, &mut doc.cp, &mut self.contact),
+                Tab::IdDb => iddbtab::show(ui, doc, &mut self.iddb),
                 Tab::Lists => lists::show(ui, &mut doc.cp, &mut self.list),
                 Tab::Dtmf => dtmf::show(ui, &mut doc.cp, &mut self.dtmf),
                 Tab::Aprs => aprs::show(ui, &mut doc.cp, &mut self.aprs),
@@ -948,8 +959,11 @@ impl eframe::App for App {
                 }
             }
             let focus = ui.memory(|m| m.focused());
-            let generation = doc.generation;
-            doc.note(before, focus);
+            let generation = gen_before;
+            // a change of the ID database made its own history step
+            if doc.generation == gen_before {
+                doc.note(before, focus);
+            }
             if doc.generation != generation {
                 // Same reason: the toolbar above shows the state from before this edit.
                 ui.ctx().request_repaint();

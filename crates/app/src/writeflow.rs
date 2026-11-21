@@ -30,6 +30,8 @@ pub enum State {
 
 pub struct Flow {
     pub state: State,
+    /// The records of the ID database this write sends, when the document changed it.
+    iddb: Option<usize>,
 }
 
 fn table_name(t: Table) -> &'static str {
@@ -47,7 +49,7 @@ fn table_name(t: Table) -> &'static str {
 
 impl Flow {
     pub fn new() -> Self {
-        Self { state: State::Idle }
+        Self { state: State::Idle, iddb: None }
     }
 
     pub fn busy(&self) -> bool {
@@ -58,6 +60,7 @@ impl Flow {
     pub fn request(&mut self, doc: &Doc) {
         let old = Codeplug::decode(&doc.base);
         let empty = doc.cp.channels.is_empty() && doc.cp.zones.is_empty() && doc.cp.contacts.is_empty();
+        self.iddb = doc.iddb_pending.then(|| doc.cp.iddb.as_ref().map_or(0, |h| h.count as usize));
         self.state = State::Confirm(diff::changes(&old, &doc.cp), doc.from_file, empty, false);
     }
 
@@ -70,6 +73,7 @@ impl Flow {
     ) -> Option<String> {
         let mut status = None;
         let mut next: Option<State> = None;
+        let iddb = self.iddb;
         match &mut self.state {
             State::Idle => {}
             State::Confirm(changes, from_file, empty, ack) => {
@@ -85,7 +89,7 @@ impl Flow {
                     if *from_file {
                         ui.label("This codeplug was not read from the radio (it is from a file, or new). The radio's codeplug will be replaced by it: whatever differs on the radio is overwritten (only those blocks are written).");
                     } else if changes.is_empty() {
-                        ui.label("No records changed.");
+                        ui.label(if iddb.is_some() { "No codeplug records changed." } else { "No records changed." });
                     } else {
                         ui.strong(format!("{} change(s):", changes.len()));
                         egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
@@ -104,6 +108,15 @@ impl Flow {
                                     ui.label(if c.detail.is_empty() { who } else { format!("{who}: {}", c.detail) });
                                 });
                             }
+                        });
+                    }
+                    if let Some(n) = iddb {
+                        ui.add_space(8.0);
+                        ui.strong("ID database");
+                        ui.label(if n == 0 {
+                            "The radio's DMR ID database will be erased.".to_string()
+                        } else {
+                            format!("The radio's DMR ID database will be replaced by one of {n} record{}. It is sent after the codeplug and is not part of the backup.", if n == 1 { "" } else { "s" })
                         });
                     }
                     if *empty {
@@ -136,6 +149,7 @@ impl Flow {
                             port.to_string(),
                             if d.from_file { None } else { Some(d.base.clone()) },
                             d.encoded(),
+                            iddb.is_some(),
                             ctx.clone(),
                         );
                         next = Some(State::Running {
@@ -190,11 +204,18 @@ impl Flow {
                             if let Some(d) = doc {
                                 d.mark_saved();
                             }
-                            let text = if w.blocks == 0 {
+                            let mut text = if w.blocks == 0 {
                                 "The radio already holds this codeplug; nothing needed writing, so no backup was made.".to_string()
                             } else {
                                 format!("The radio now holds this codeplug ({} block(s) written and read back to verify). Backup of the old codeplug: {}", w.blocks, w.backup.display())
                             };
+                            if let Some(n) = w.iddb_blocks {
+                                text += &if n == 0 {
+                                    " The radio already held this ID database.".to_string()
+                                } else {
+                                    format!(" The ID database was written ({n} block(s), read back to verify).")
+                                };
+                            }
                             status = Some(text.clone());
                             State::Done { ok: true, text }
                         }
@@ -240,7 +261,7 @@ mod tests {
 
     #[test]
     fn an_empty_codeplug_needs_the_box_ticked_before_it_can_be_written() {
-        let mut f = Flow { state: State::Idle };
+        let mut f = Flow::new();
         let mut d = Doc::from_image(Image::blank(), "new".into());
         f.request(&d);
         assert!(matches!(f.state, State::Confirm(_, _, true, false)));

@@ -42,6 +42,8 @@ pub enum WriteMsg {
 
 pub struct WriteDone {
     pub blocks: usize,
+    /// Blocks of the ID database sent (the header's counts twice); `None` when it was not part of the write.
+    pub iddb_blocks: Option<usize>,
     pub backup: std::path::PathBuf,
 }
 
@@ -79,12 +81,27 @@ pub fn stamp() -> String {
     )
 }
 
+/// The ID database goes in a session of its own after the codeplug (iddb-compact.md 4.3). It is not part of the backup:
+/// it can be megabytes, and the radio keeps its own copy only until it is replaced.
+fn send_iddb<P: std::io::Read + std::io::Write>(
+    radio: &mut rfcps_link::Radio<P>,
+    image: &Image,
+    say: &dyn Fn(WriteMsg),
+) -> Result<Option<usize>, String> {
+    say(WriteMsg::Phase("Writing the ID database…".into()));
+    radio
+        .write_iddb(image, &mut |d, t| say(WriteMsg::Progress(d, t)))
+        .map(|r| Some(r.blocks))
+        .map_err(|e| format!("{e}. The codeplug itself was written before the ID database."))
+}
+
 /// Writes a codeplug to a radio on a new thread: the radio's current codeplug is read and saved first (and the write
 /// does not start if that fails), then the changed blocks are written and the radio is read back.
 pub fn write_radio(
     port: String,
     base: Option<Image>,
     image: Image,
+    iddb: bool,
     ctx: egui::Context,
 ) -> Receiver<WriteMsg> {
     let (tx, rx) = channel();
@@ -108,9 +125,13 @@ pub fn write_radio(
             let sent = radio.image_for_write(basis, &image).map_err(|e| e.to_string())?;
             // Nothing differs: no backup and no write. (The blocks' checksums are compared, which is quick.)
             let differs = radio.verify(&sent).map_err(|e| e.to_string())?;
+            // The ID database goes in a session of its own after the codeplug (iddb-compact.md 4.3). It is not part of
+            // the backup: it can be megabytes, and the radio keeps its own copy only until it is replaced.
             if differs.is_empty() {
+                let iddb_blocks = if iddb { send_iddb(&mut radio, &image, &say)? } else { None };
                 return Ok(WriteDone {
                     blocks: 0,
+                    iddb_blocks,
                     backup: std::path::PathBuf::new(),
                 });
             }
@@ -137,8 +158,10 @@ pub fn write_radio(
                         backup.display()
                     )
                 })?;
+            let iddb_blocks = if iddb { send_iddb(&mut radio, &image, &say)? } else { None };
             Ok(WriteDone {
                 blocks: report.blocks,
+                iddb_blocks,
                 backup,
             })
         })();

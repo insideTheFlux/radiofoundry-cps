@@ -122,6 +122,74 @@ fn the_import_and_export_menus_list_their_formats() {
     }
 }
 
+const USERS: &str = "RADIO_ID,CALLSIGN,FIRST_NAME,LAST_NAME,CITY,STATE,COUNTRY\n\
+    3100001,K6ABC,Ann,Smith,San Jose,California,United States\n\
+    3100002,W1AW,Hiram,Maxim,Newington,Connecticut,United States\n\
+    2620001,DL1XYZ,Hans,Mueller,Berlin,,Germany\n";
+
+#[test]
+fn the_id_database_is_built_from_a_user_file_and_undone() {
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.load_users(USERS, "user.csv".into());
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    assert!(h.state().tab == Tab::IdDb);
+    h.get_by_label("3 of 3 users selected. ID database size: 1 KB.");
+    h.get_by_label("The codeplug has no DMR ID database.");
+    click(&mut h, "Write ID Database");
+    {
+        let d = h.state().doc.as_ref().unwrap();
+        assert_eq!(d.cp.iddb.as_ref().map(|x| x.count), Some(3));
+        assert!(d.iddb_pending);
+    }
+    h.get_by_label_contains("The ID database now holds 3 records");
+    // writing again asks first
+    click(&mut h, "Write ID Database");
+    h.get_by_label_contains("This replaces the current ID database of 3 records");
+    click(&mut h, "Cancel");
+    // the toolbar's write is on, though no codeplug record changed
+    assert!(!disabled_by_prefix(&h, "Undo"));
+    click(&mut h, "Remove ID Database");
+    click(&mut h, "Remove");
+    assert!(h.state().doc.as_ref().unwrap().cp.iddb.is_none());
+    click(&mut h, "Undo");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.iddb.as_ref().map(|x| x.count), Some(3));
+}
+
+#[test]
+fn users_become_private_contacts_once() {
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.load_users(USERS, "user.csv".into());
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    click(&mut h, "Add as Contacts");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.contacts.len(), 3);
+    h.get_by_label_contains("3 contacts added.");
+    click(&mut h, "Add as Contacts");
+    h.get_by_label_contains("No contacts were added. 3 were already contacts.");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.contacts.len(), 3);
+    click(&mut h, "Undo");
+    assert!(h.state().doc.as_ref().unwrap().cp.contacts.is_empty());
+}
+
+/// A tall window, so the whole ID database tab is on screen (a click outside the visible area lands on nothing).
+fn tall(app: App) -> H {
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1240.0, 1800.0))
+        .build_eframe(move |cc| {
+            theme::apply(&cc.egui_ctx);
+            app
+        });
+    h.run();
+    h
+}
+
+fn disabled_by_prefix(h: &H, prefix: &str) -> bool {
+    h.get_by_label_contains(prefix).accesskit_node().is_disabled()
+}
+
 #[test]
 fn new_asks_before_it_throws_away_edits() {
     let mut h = harness_with_doc();

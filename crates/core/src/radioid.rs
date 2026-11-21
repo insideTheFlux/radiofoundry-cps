@@ -8,6 +8,7 @@
 
 use crate::iddb::{self, Record};
 use crate::regions::{ABBREV, COUNTRIES};
+use crate::records::{CallType, Contact, MAX_CONTACTS};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -345,6 +346,61 @@ pub fn iddb_size(count: usize, text_len: usize, end: usize) -> Size {
     let rec = iddb::record_size(text_len);
     let fit = iddb::capacity(rec, end);
     Size { rec, bytes: iddb::HEADER + count.min(fit) * rec, fit }
+}
+
+// --- Private-call contacts from users ---
+
+/// Names are stored in Latin-1: other characters lose their accents (Ł to L) or are dropped.
+fn latin1(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let mut out = String::new();
+    for c in s.chars() {
+        if (c as u32) < 0x100 {
+            out.push(c);
+            continue;
+        }
+        match iddb::fold(c) {
+            Some(f) => out.push_str(f),
+            None => out.extend(c.to_string().nfd().filter(|d| (*d as u32) < 0x100)),
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Added {
+    pub added: usize,
+    pub existing: usize,
+    pub full: usize,
+}
+
+/// Adds users as private-call contacts. A user whose ID is already a private contact is skipped; when the contact list
+/// fills, the rest are left out. A new contact takes the lowest free number.
+pub fn add_contacts(contacts: &mut Vec<Contact>, users: &[&User], template: &str, upper: bool) -> Added {
+    let mut have: HashSet<u32> = contacts.iter().filter(|c| c.call_type == CallType::Private).map(|c| c.id).collect();
+    let mut taken: HashSet<u16> = contacts.iter().map(|c| c.number).collect();
+    let mut next = 1u16;
+    let mut r = Added::default();
+    for u in users {
+        if have.contains(&u.id) {
+            r.existing += 1;
+            continue;
+        }
+        if contacts.len() >= MAX_CONTACTS {
+            r.full += 1;
+            continue;
+        }
+        let name: String = latin1(&format(u, template, upper, 0)).chars().take(16).collect::<String>().trim().to_string();
+        let name = if name.is_empty() { u.call.clone() } else { name };
+        while taken.contains(&next) {
+            next += 1;
+        }
+        taken.insert(next);
+        contacts.push(Contact { number: next, name, id: u.id, call_type: CallType::Private, timeslot: 0 });
+        have.insert(u.id);
+        r.added += 1;
+    }
+    r
 }
 
 #[cfg(test)]

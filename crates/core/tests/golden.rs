@@ -945,6 +945,29 @@ fn the_radioid_source_matches_the_web_editor() {
             let want: Vec<u64> = sel["ids"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
             assert_eq!(got, want, "{name}: selection {j}");
         }
+        for a in c["adds"].as_array().unwrap() {
+            use rfcps_core::records::{CallType, Contact};
+            let ct = |v: &serde_json::Value| Contact {
+                number: v["number"].as_u64().unwrap() as u16,
+                name: s(&v["name"]),
+                id: v["id"].as_u64().unwrap() as u32,
+                call_type: if v["type"] == "private" { CallType::Private } else { CallType::Group },
+                timeslot: v["timeslot"].as_u64().unwrap() as u8,
+            };
+            let mut list: Vec<Contact> = a["before"].as_array().unwrap().iter().map(ct).collect();
+            let take = a["take"].as_u64().unwrap() as usize;
+            let sel: Vec<&radioid::User> = users.iter().take(take).collect();
+            let r = radioid::add_contacts(&mut list, &sel, &s(&a["t"]), a["upper"].as_bool().unwrap());
+            let w = &a["r"];
+            assert_eq!(
+                (r.added as u64, r.existing as u64, r.full as u64),
+                (w["added"].as_u64().unwrap(), w["existing"].as_u64().unwrap(), w["full"].as_u64().unwrap()),
+                "{name}: add_contacts counts for {}",
+                a["t"]
+            );
+            let want: Vec<Contact> = a["after"].as_array().unwrap().iter().map(ct).collect();
+            assert_eq!(list, want, "{name}: contacts after adding with {}", a["t"]);
+        }
         type Regions = Vec<(String, u64, Vec<(String, u64)>)>;
         let got: Regions =
             radioid::regions_of(&users).into_iter().map(|r| (r.country, r.count as u64, r.states.into_iter().map(|(s, n)| (s, n as u64)).collect())).collect();

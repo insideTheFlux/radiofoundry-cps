@@ -28,7 +28,7 @@ pub const fn record_size(text_len: usize) -> usize {
 }
 
 /// Letters without a decomposed form, spelled in plain Latin (the rest lose their accents through NFD).
-fn fold(c: char) -> Option<&'static str> {
+pub(crate) fn fold(c: char) -> Option<&'static str> {
     Some(match c {
         'Ł' => "L",
         'ł' => "l",
