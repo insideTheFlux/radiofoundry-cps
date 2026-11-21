@@ -846,7 +846,13 @@ impl eframe::App for App {
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
                 Tab::Contacts => contacts::show(ui, &mut doc.cp, &mut self.contact),
                 Tab::Lists => lists::show(ui, &mut doc.cp, &mut self.list),
-                Tab::General => general::show(ui, &mut doc.cp),
+                Tab::General => {
+                    let newer = rfcps_core::kv::decode_area(doc.base.bytes()).state
+                        == rfcps_core::kv::AreaState::Newer;
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| general::show(ui, &mut doc.cp, newer));
+                }
             }
             let focus = ui.memory(|m| m.focused());
             let generation = doc.generation;

@@ -98,8 +98,16 @@ pub fn write_radio(
             radio.ping().map_err(|e| {
                 format!("{e} (is it a RadioFoundry radio, switched on, on this port?)")
             })?;
+            // What the radio holds now, which is also the backup. The image to send keeps the radio's settings area
+            // unless the edit changed a key (codeplug-settings.md 6), so a key changed from the radio's own menu does
+            // not count as a difference.
+            let current = radio
+                .read_image(&mut |_, _| {})
+                .map_err(|e| e.to_string())?;
+            let basis = base.as_ref().unwrap_or(&current);
+            let sent = radio.image_for_write(basis, &image).map_err(|e| e.to_string())?;
             // Nothing differs: no backup and no write. (The blocks' checksums are compared, which is quick.)
-            let differs = radio.verify(&image).map_err(|e| e.to_string())?;
+            let differs = radio.verify(&sent).map_err(|e| e.to_string())?;
             if differs.is_empty() {
                 return Ok(WriteDone {
                     blocks: 0,
@@ -109,9 +117,6 @@ pub fn write_radio(
             say(WriteMsg::Phase(
                 "Saving a backup of the radio's codeplug…".into(),
             ));
-            let current = radio
-                .read_image(&mut |_, _| {})
-                .map_err(|e| e.to_string())?;
             let dir = backup_dir();
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("could not make {}: {e}", dir.display()))?;
@@ -125,7 +130,7 @@ pub fn write_radio(
                 .map_err(|e| format!("could not save the backup {}: {e}", backup.display()))?;
             say(WriteMsg::Phase("Writing to the radio…".into()));
             let report = radio
-                .write_image(base.as_ref().unwrap_or(&current), &image, &mut |d, t| say(WriteMsg::Progress(d, t)))
+                .write_image(basis, &image, &mut |d, t| say(WriteMsg::Progress(d, t)))
                 .map_err(|e| {
                     format!(
                         "{e}. The radio's codeplug was saved first as {}.",

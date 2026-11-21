@@ -19,6 +19,12 @@ cargo test -p rfcps gui                              # the synthetic tests
 RFCPS_IMAGE=... cargo test -p rfcps gui              # also walks every tab of a real image (the file is only read)
 ```
 
+The General tab's settings-area fields (ARS server, IP gateway, tones, signaling tones) are covered too: typing an ID,
+picking a tone, switching a signaling tone on, and the warning for an area of a newer version. The link tests
+(`crates/link/tests/write.rs`) run the area through the software radio: a key edit writes only that block, a key the
+radio's own menu changed since the read is kept, a file without an area never erases the radio's keys, and an area of a
+newer version is never overwritten.
+
 Not covered: native file dialogs, the serial write itself (the software-radio tests in `rfcps-link` and the hand test
 on a radio cover it), and pixel snapshots (`egui_kittest`'s `snapshot` feature, not enabled).
 
@@ -32,6 +38,7 @@ radio image. They run only when these variables are set, and otherwise pass with
 | `RFCPS_IMAGE` | a codeplug image read from a radio (`tools/cps_fast.py read`, `--regions radio`) |
 | `RFCPS_GOLDEN` | the web editor's decode of it, as JSON (`golden.mjs`, a small Node script over `model.js decode()`) |
 | `RFCPS_EDITED_JS` | the web editor's encode of a fixed set of edits to the same image (`edit_js.mjs`) |
+| `RFCPS_KV_DIR` | the web editor's settings-area sectors for fixed key edits, with the radio-merge case (`edit_kv.mjs`, a small Node script over `kv.js` `putKeys` and `areaForWrite`) |
 
 ```
 RFCPS_IMAGE=... RFCPS_GOLDEN=... RFCPS_EDITED_JS=... cargo test -p rfcps-core --test golden -- --nocapture

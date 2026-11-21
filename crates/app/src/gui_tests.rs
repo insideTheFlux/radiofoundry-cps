@@ -8,6 +8,7 @@
 //! `RFCPS_IMAGE=<codeplug image> cargo test -p rfcps gui` also walks every tab of a real image (the file is only read).
 
 use super::*;
+use egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 
@@ -240,3 +241,98 @@ fn a_real_image_draws_on_every_tab() {
     assert!(disabled(&h, "Undo"));
     h.get_by_label("No unsaved changes");
 }
+
+// --- The General tab's settings-area fields ---
+
+/// The General tab is taller than the usual window, and a click outside the visible area lands on nothing: a tall
+/// window shows every field.
+fn harness_on_general() -> H {
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1240.0, 1800.0))
+        .build_eframe(move |cc| {
+            theme::apply(&cc.egui_ctx);
+            app
+        });
+    h.run();
+    click(&mut h, "General");
+    h
+}
+
+/// Types into a text field: it must have focus first (a click alone doesn't give it in one frame).
+fn type_into(h: &mut H, label: &str, text: &str) {
+    h.get_by_role_and_label(Role::TextInput, label).focus();
+    h.run();
+    h.get_by_role_and_label(Role::TextInput, label).type_text(text);
+    h.run();
+}
+
+/// Opens a drop-down and picks an entry.
+fn pick(h: &mut H, combo: &str, entry: &str) {
+    h.get_by_role_and_label(Role::ComboBox, combo).click();
+    h.step();
+    h.run();
+    click(h, entry);
+}
+
+#[test]
+fn the_general_tab_offers_the_keyed_settings() {
+    let h = harness_on_general();
+    for l in ["ARS server ID", "IP gateway ID"] {
+        h.get_by_role_and_label(Role::TextInput, l);
+    }
+    for l in ["Call end tone", "Transmit time-out warning", "Low battery tone", "Transmit denied tone"] {
+        h.get_by_role_and_label(Role::ComboBox, l);
+    }
+    h.get_by_label("Start of transmission");
+    h.get_by_label("End of transmission");
+    h.get_by_label("End of reception");
+    // A new codeplug carries no key: every one is absent.
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.general.keys, rfcps_core::kv::Keys::default());
+}
+
+#[test]
+fn typing_an_id_sets_the_key_and_clearing_it_removes_it() {
+    let mut h = harness_on_general();
+    type_into(&mut h, "ARS server ID", "3100001");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.general.keys.ars_server, Some(3_100_001));
+    // A value no DMR ID can be is not applied.
+    type_into(&mut h, "IP gateway ID", "99999999");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.general.keys.ip_gateway, None);
+}
+
+#[test]
+fn a_tone_can_be_set_off_and_back_to_the_radios_own() {
+    let mut h = harness_on_general();
+    pick(&mut h, "Call end tone", "Off");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.general.keys.call_end_tone, Some(false));
+    pick(&mut h, "Call end tone", "The radio's own setting");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.general.keys.call_end_tone, None);
+}
+
+#[test]
+fn a_signaling_tone_is_switched_on_with_its_checkbox() {
+    let mut h = harness_on_general();
+    click(&mut h, "Start of transmission");
+    let k = &h.state().doc.as_ref().unwrap().cp.general.keys;
+    assert!(k.sig[0].is_some() && k.sig[1].is_none() && k.sig[2].is_none());
+    // Switched off again, it is an absent key.
+    click(&mut h, "Start of transmission");
+    assert!(h.state().doc.as_ref().unwrap().cp.general.keys.sig[0].is_none());
+}
+
+#[test]
+fn a_newer_settings_area_is_flagged() {
+    let mut app = App::with_ports(Vec::new());
+    let mut img = Image::blank();
+    let at = rfcps_core::kv::KV_ADDR;
+    img.bytes_mut()[at..at + 4].copy_from_slice(b"RFKV");
+    img.bytes_mut()[at + 4] = 2; // a later version
+    app.open_image(img.bytes(), "newer.bin".into());
+    let mut h = harness_with(app);
+    click(&mut h, "General");
+    h.get_by_label_contains("settings area is from a newer version");
+}
+
+
