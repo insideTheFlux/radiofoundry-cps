@@ -597,3 +597,83 @@ fn save_image_asks_before_it_carries_a_secret_key() {
     click(&mut h, "Cancel");
     assert!(h.state().confirm_keys.is_none());
 }
+
+// --- DMR Tier III ---
+
+fn t3_system_with_channel() -> System {
+    let mut s = System::new(sys::SYSTEM_T3, "T3 Net");
+    s.number = 1;
+    s.entries.push(SysEntry {
+        cls: 0,
+        group: 0xFF,
+        control: true,
+        flags: 0,
+        body: EntryBody::T3Channel { lcn: 1, rx_hz: 438_100_000, tx_hz: 443_100_000, cc: None },
+        raw: Vec::new(),
+    });
+    s
+}
+
+#[test]
+fn a_tier_iii_system_is_added_edited_and_given_a_key() {
+    let mut h = harness_on_systems(|_| {});
+    click(&mut h, "Add DMR Tier III system");
+    let s = &doc_systems(&h)[0];
+    // As in the web editor, a new Tier III system can transmit.
+    assert_eq!((s.type_id, s.tx), (sys::SYSTEM_T3, true));
+    h.get_by_label("DMR Tier III");
+
+    retype(&mut h, "NET", "9");
+    pick(&mut h, "Network model", "Large");
+    match &doc_systems(&h)[0].fields {
+        SystemFields::T3(f) => assert_eq!((f.model, f.net), (2, 9)),
+        other => panic!("{other:?}"),
+    }
+    // A NET above the model's limit is not applied (Large goes to 15).
+    retype(&mut h, "NET", "99");
+    match &doc_systems(&h)[0].fields {
+        SystemFields::T3(f) => assert_eq!(f.net, 9),
+        other => panic!("{other:?}"),
+    }
+    click(&mut h, "Follow all-calls");
+    click(&mut h, "Add channel");
+    click(&mut h, "Add site value");
+    let s = &doc_systems(&h)[0];
+    assert_eq!(s.entries.len(), 1);
+    assert!(matches!(s.entries[0].body, EntryBody::T3Channel { lcn: 1, .. }));
+    assert!(matches!(&s.fields, SystemFields::T3(f) if f.all_calls && f.sites == vec![0]));
+
+    // No key at first; one is set from 32 hex digits and shown only when asked.
+    h.get_by_label("No key.");
+    // The key field is masked, so a screen reader says so (a password input).
+    h.get_by_role_and_label(Role::PasswordInput, "New key (32 hex digits)").focus();
+    h.run();
+    h.get_by_role_and_label(Role::PasswordInput, "New key (32 hex digits)").type_text("00112233445566778899AABBCCDDEEFF");
+    h.run();
+    type_into(&mut h, "PSN (empty for none)", "66051");
+    click(&mut h, "Set the key");
+    let k = sys::decode_t3_key(doc_systems(&h)[0].secret.as_deref().unwrap()).unwrap();
+    assert_eq!((sys::key_hex(&k.key).as_str(), k.psn), ("00112233445566778899AABBCCDDEEFF", 66051));
+    h.get_by_label_contains("A key is set");
+    assert!(h.query_by_label_contains("00112233445566778899AABBCCDDEEFF").is_none(), "the key is not shown unasked");
+    click(&mut h, "Show key");
+    h.get_by_label_contains("00112233445566778899AABBCCDDEEFF");
+    click(&mut h, "Hide key");
+    assert!(h.query_by_label_contains("00112233445566778899AABBCCDDEEFF").is_none());
+    click(&mut h, "Remove the key");
+    assert!(doc_systems(&h)[0].secret.is_none());
+}
+
+#[test]
+fn a_tier_iii_channel_is_put_on_a_system_and_may_transmit_as_in_the_web_editor() {
+    let mut h = harness_with_channel(|cp| cp.systems.push(t3_system_with_channel()));
+    pick(&mut h, "Mode", "T3");
+    let c = channel(&h);
+    assert_eq!(c.kind(), modes::KIND_T3);
+    let t = c.tagged.as_ref().unwrap();
+    assert_eq!((t.system, t.tx), (0, true));
+    // The record is the control channel's frequencies and a receive-only stand-in.
+    assert_eq!((c.rx_hz, c.tx_hz), (438_100_000, 443_100_000));
+    assert!(c.rx_only);
+    h.get_by_role_and_label(Role::ComboBox, "System");
+}

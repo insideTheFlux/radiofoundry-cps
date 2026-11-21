@@ -702,70 +702,13 @@ fn mode_group(ui: &mut Ui, c: &mut Channel, systems: &[System], choices: &Choice
             }
         }
         Some(Params::P25Trunk(mut p)) => {
-            group(ui, "P25 trunked");
-            let mut system = c.tagged.as_ref().map_or(0xFF, |t| t.system);
-            let mut no_fallback = c.tagged.as_ref().is_some_and(|t| t.no_fallback);
-            egui::Grid::new(("p25t", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
-                let l = ui.label("System");
-                let shown = systems
-                    .iter()
-                    .find(|s| system != 0xFF && s.number == u16::from(system) + 1)
-                    .map_or_else(
-                        || if system == 0xFF { "none".to_string() } else { format!("#{} (missing)", u16::from(system) + 1) },
-                        |s| format!("{}  {}", s.number, s.name),
-                    );
-                egui::ComboBox::from_id_salt(("p25tsys", number))
-                    .selected_text(shown)
-                    .width(220.0)
-                    .truncate()
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut system, 0xFF, "none");
-                        for s in systems.iter().filter(|s| s.type_id == rfcps_core::systems::SYSTEM_P25_TRUNK) {
-                            ui.selectable_value(&mut system, (s.number - 1) as u8, format!("{}  {}", s.number, s.name));
-                        }
-                    })
-                    .response
-                    .labelled_by(l.id);
-                ui.end_row();
-                let l = ui.label("Follow every group");
-                ui.checkbox(&mut p.follow_all, "").labelled_by(l.id);
-                ui.end_row();
-                let l = ui.label("TX Contact (talk group)");
-                contact_combo(ui, c, &choices.contacts, ("p25tcontact", number)).labelled_by(l.id);
-                ui.end_row();
-                let l = ui.label("RX Group List");
-                let shown = if c.rx_list == 0 {
-                    "none".to_string()
-                } else {
-                    choices.lists.iter().find(|(n, _)| *n == c.rx_list).map_or(format!("#{}", c.rx_list), |(_, n)| n.clone())
-                };
-                egui::ComboBox::from_id_salt(("p25tlist", number))
-                    .selected_text(shown)
-                    .width(160.0)
-                    .truncate()
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut c.rx_list, 0, "none");
-                        for (n, name) in &choices.lists {
-                            ui.selectable_value(&mut c.rx_list, *n, name);
-                        }
-                    })
-                    .response
-                    .labelled_by(l.id);
-                ui.end_row();
-                let l = ui.label("No fallback on this channel");
-                ui.checkbox(&mut no_fallback, "").labelled_by(l.id);
-                ui.end_row();
-            });
-            ui.label(
-                RichText::new("The channel's frequencies are the system's first control channel's. It transmits only when its RX Only is off and the system allows it.")
-                    .size(13.0)
-                    .color(muted),
-            );
+            trunk_group(ui, c, systems, choices, "P25 trunked", rfcps_core::systems::SYSTEM_P25_TRUNK, Some(&mut p.follow_all));
             if let Some(t) = &mut c.tagged {
                 t.params = Params::P25Trunk(p);
-                t.system = system;
-                t.no_fallback = no_fallback;
             }
+        }
+        Some(Params::T3) => {
+            trunk_group(ui, c, systems, choices, "DMR Tier III", rfcps_core::systems::SYSTEM_T3, None);
         }
         _ => {
             group(ui, modes::kind_name(kind));
@@ -790,4 +733,84 @@ fn squelch_combo(ui: &mut Ui, salt: (&str, u16), value: &mut u8, open: &str) -> 
             ui.selectable_value(value, 1, "Selective (this radio's calls)");
         })
         .response
+}
+
+/// The section of a channel that runs on a system (P25 trunked, DMR Tier III): the system, whether it follows every
+/// group (P25 trunked), the talk target, the RX group list and no fallback.
+fn trunk_group(
+    ui: &mut Ui,
+    c: &mut Channel,
+    systems: &[System],
+    choices: &Choices,
+    title: &str,
+    sys_type: u8,
+    follow_all: Option<&mut bool>,
+) {
+    let number = c.number;
+    let muted = theme::palette(ui).muted;
+    group(ui, title);
+    let mut system = c.tagged.as_ref().map_or(0xFF, |t| t.system);
+    let mut no_fallback = c.tagged.as_ref().is_some_and(|t| t.no_fallback);
+    egui::Grid::new(("trunk", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        let l = ui.label("System");
+        let shown = systems
+            .iter()
+            .find(|s| system != 0xFF && s.number == u16::from(system) + 1)
+            .map_or_else(
+                || if system == 0xFF { "none".to_string() } else { format!("#{} (missing)", u16::from(system) + 1) },
+                |s| format!("{}  {}", s.number, s.name),
+            );
+        egui::ComboBox::from_id_salt(("trunksys", number))
+            .selected_text(shown)
+            .width(220.0)
+            .truncate()
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut system, 0xFF, "none");
+                for s in systems.iter().filter(|s| s.type_id == sys_type) {
+                    ui.selectable_value(&mut system, (s.number - 1) as u8, format!("{}  {}", s.number, s.name));
+                }
+            })
+            .response
+            .labelled_by(l.id);
+        ui.end_row();
+        if let Some(f) = follow_all {
+            let l = ui.label("Follow every group");
+            ui.checkbox(f, "").labelled_by(l.id);
+            ui.end_row();
+        }
+        let l = ui.label("TX Contact (talk group)");
+        contact_combo(ui, c, &choices.contacts, ("trunkcontact", number)).labelled_by(l.id);
+        ui.end_row();
+        let l = ui.label("RX Group List");
+        let shown = if c.rx_list == 0 {
+            "none".to_string()
+        } else {
+            choices.lists.iter().find(|(n, _)| *n == c.rx_list).map_or(format!("#{}", c.rx_list), |(_, n)| n.clone())
+        };
+        egui::ComboBox::from_id_salt(("trunklist", number))
+            .selected_text(shown)
+            .width(160.0)
+            .truncate()
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut c.rx_list, 0, "none");
+                for (n, name) in &choices.lists {
+                    ui.selectable_value(&mut c.rx_list, *n, name);
+                }
+            })
+            .response
+            .labelled_by(l.id);
+        ui.end_row();
+        let l = ui.label("No fallback on this channel");
+        ui.checkbox(&mut no_fallback, "").labelled_by(l.id);
+        ui.end_row();
+    });
+    ui.label(
+        RichText::new("The channel's frequencies are the system's first control channel's. It transmits only when its RX Only is off and the system allows it.")
+            .size(13.0)
+            .color(muted),
+    );
+    if let Some(t) = &mut c.tagged {
+        t.system = system;
+        t.no_fallback = no_fallback;
+    }
 }

@@ -9,7 +9,8 @@ use crate::theme;
 use crate::widgets::{checked_text, name_edit, parse_mhz};
 use eframe::egui::{self, RichText, Ui};
 use rfcps_core::systems::{
-    self as sys, EntryBody, SysEntry, System, SystemFields, MAX_ENTRIES, MAX_SYSTEMS, SYSTEM_P25_TRUNK,
+    self as sys, EntryBody, SysEntry, System, SystemFields, T3Key, T3System, MAX_ENTRIES, MAX_SYSTEMS, SYSTEM_P25_TRUNK,
+    SYSTEM_T3,
 };
 use rfcps_core::Codeplug;
 
@@ -35,15 +36,14 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
         ui.vertical(|ui| {
             ui.set_width(230.0);
             let n_entries: usize = cp.systems.iter().map(|s| s.entries.len()).sum();
-            if ui
-                .add_enabled(cp.systems.len() < MAX_SYSTEMS, egui::Button::new("Add P25 trunked system"))
-                .clicked()
-            {
-                let mut s = System::new(SYSTEM_P25_TRUNK, &format!("System {}", cp.systems.len() + 1));
-                s.name.truncate(16);
-                cp.systems.push(s);
-                sys::number_systems(&mut cp.systems);
-                *selected = cp.systems.last().map(|s| s.number);
+            for (label, type_id) in [("Add P25 trunked system", SYSTEM_P25_TRUNK), ("Add DMR Tier III system", SYSTEM_T3)] {
+                if ui.add_enabled(cp.systems.len() < MAX_SYSTEMS, egui::Button::new(label)).clicked() {
+                    let mut s = System::new(type_id, &format!("System {}", cp.systems.len() + 1));
+                    s.name.truncate(16);
+                    cp.systems.push(s);
+                    sys::number_systems(&mut cp.systems);
+                    *selected = cp.systems.last().map(|s| s.number);
+                }
             }
             ui.label(format!("{} systems, {n_entries} of {MAX_ENTRIES} entries", cp.systems.len()));
             ui.separator();
@@ -157,12 +157,14 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         ui.label("Type");
         ui.label(match s.type_id {
             SYSTEM_P25_TRUNK => "P25 trunked".to_string(),
+            SYSTEM_T3 => "DMR Tier III".to_string(),
             t => format!("Type {t}"),
         });
         ui.end_row();
         let l = ui.label("Transmit side");
         let text = match (s.tx, matches!(&s.fields, SystemFields::P25Trunk(f) if f.no_reg)) {
             (false, _) => "Listen only",
+            (true, _) if s.type_id == SYSTEM_T3 => "Transmit",
             (true, false) => "Transmit and register",
             (true, true) => "Transmit without registering",
         };
@@ -172,8 +174,10 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
             .width(240.0)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut choice, 1, "Listen only");
-                ui.selectable_value(&mut choice, 2, "Transmit and register");
-                ui.selectable_value(&mut choice, 3, "Transmit without registering");
+                ui.selectable_value(&mut choice, 2, if s.type_id == SYSTEM_T3 { "Transmit" } else { "Transmit and register" });
+                if s.type_id == SYSTEM_P25_TRUNK {
+                    ui.selectable_value(&mut choice, 3, "Transmit without registering");
+                }
             })
             .response;
         r.labelled_by(l.id);
@@ -202,7 +206,7 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         ui.end_row();
     });
     ui.label(
-        RichText::new("A new system is listen only: the radio never registers or transmits on it, whatever a channel says. An empty ID uses the radio's P25 unit ID.")
+        RichText::new("Listen only: the radio never registers or transmits on the system, whatever a channel says. A new P25 trunked system is listen only; a new Tier III system can transmit, as in the web editor. An empty ID uses the radio's own.")
             .size(13.0)
             .color(muted),
     );
@@ -245,12 +249,21 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         ui.label(RichText::new("0 seconds goes back to the control channel at once. 0 dBm uses the radio's own threshold.").size(13.0).color(muted));
     }
 
+    if let SystemFields::T3(f) = &mut s.fields {
+        t3_form(ui, f, number);
+    }
     if s.type_id == SYSTEM_P25_TRUNK {
         entries(ui, s, number);
+    } else if s.type_id == SYSTEM_T3 {
+        t3_channels(ui, s, number);
     }
 
     group(ui, "Secret");
-    if s.secret.is_some() || s.needs_key {
+    if s.type_id == SYSTEM_T3 {
+        let l = ui.label("Authenticates (needs its key)");
+        ui.checkbox(&mut s.needs_key, "").labelled_by(l.id);
+        key_section(ui, s, number);
+    } else if s.secret.is_some() || s.needs_key {
         ui.label(if s.secret.is_some() {
             "This system has a secret. It is kept as it is and never shown here."
         } else {
@@ -407,4 +420,267 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
     if let Some(i) = remove {
         s.entries.remove(i);
     }
+}
+
+const MODELS: [&str; 4] = ["Tiny", "Small", "Large", "Huge"];
+const SEPARATIONS: [&str; 8] = ["5 kHz", "6.25 kHz", "10 kHz", "12.5 kHz", "15 kHz", "20 kHz", "25 kHz", "30 kHz"];
+
+fn combo<T: PartialEq + Copy>(ui: &mut Ui, salt: (&str, u16), label: &str, shown: &str, value: &mut T, items: &[(T, String)]) {
+    let l = ui.label(label);
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(shown)
+        .width(200.0)
+        .show_ui(ui, |ui| {
+            for (v, name) in items {
+                ui.selectable_value(value, *v, name);
+            }
+        })
+        .response
+        .labelled_by(l.id);
+    ui.end_row();
+}
+
+fn check(ui: &mut Ui, label: &str, value: &mut bool) {
+    let l = ui.label(label);
+    ui.checkbox(value, "").labelled_by(l.id);
+    ui.end_row();
+}
+
+/// A DMR Tier III system's fields (dmr-trunking-codeplug.md 1).
+fn t3_form(ui: &mut Ui, f: &mut T3System, number: u16) {
+    let muted = theme::palette(ui).muted;
+    group(ui, "Network");
+    egui::Grid::new(("t3_net", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        let items: Vec<(u8, String)> = MODELS.iter().enumerate().map(|(i, n)| (i as u8, (*n).to_string())).collect();
+        combo(ui, ("t3_model", number), "Network model", MODELS[usize::from(f.model & 3)], &mut f.model, &items);
+        let l = ui.label("NET");
+        let max = sys::net_max(f.model);
+        num_field(ui, egui::Id::unique(("t3_netno", number)), &mut f.net, u64::from(max), 80.0).labelled_by(l.id);
+        ui.end_row();
+        let items = [(false, "A".to_string()), (true, "B".to_string())];
+        combo(ui, ("t3_cat", number), "Category", if f.category_b { "B" } else { "A" }, &mut f.category_b, &items);
+        let items: Vec<(u8, String)> = (0..16u8).map(|n| (n, n.to_string())).collect();
+        combo(ui, ("t3_cc", number), "Color code", &f.color_code.to_string(), &mut f.color_code, &items);
+    });
+    ui.label(RichText::new(format!("NET goes up to {} in this network model.", sys::net_max(f.model))).size(13.0).color(muted));
+
+    group(ui, "Radio");
+    egui::Grid::new(("t3_radio", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        check(ui, "Register with the talkgroups", &mut f.register_talkgroups);
+        check(ui, "IP gateway", &mut f.ip_gateway);
+        let items: Vec<(u8, String)> =
+            (0..8u8).map(|n| (n, if n == 0 { "Off".to_string() } else { format!("1:{}", 1u32 << n) })).collect();
+        let shown = if f.power_save == 0 { "Off".to_string() } else { format!("1:{}", 1u32 << f.power_save) };
+        combo(ui, ("t3_ps", number), "Power save", &shown, &mut f.power_save, &items);
+    });
+
+    group(ui, "Calls");
+    egui::Grid::new(("t3_calls", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        check(ui, "Follow all-calls", &mut f.all_calls);
+        check(ui, "Follow emergency calls on any talkgroup", &mut f.emergency_any);
+        check(ui, "Follow private calls", &mut f.private_calls);
+    });
+
+    group(ui, "Roaming");
+    egui::Grid::new(("t3_roam", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        check(ui, "No roaming", &mut f.no_roaming);
+        let l = ui.label("Change site below (dBm)");
+        let id = egui::Id::unique(("t3_leave", number));
+        let (r, v) = checked_text(ui, id, f.leave_dbm.to_string(), 70.0, |t| t.trim().parse::<i8>().ok());
+        r.labelled_by(l.id);
+        if let Some(v) = v {
+            f.leave_dbm = v;
+        }
+        ui.end_row();
+    });
+    ui.label(RichText::new("Sites the radio may use (empty: any). A site value goes up to the number the network model allows.").size(13.0).color(muted));
+    let smax = sys::site_max(f.model);
+    let mut remove = None;
+    for (i, v) in f.sites.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let l = ui.label(format!("Site {}", i + 1));
+            num_field(ui, egui::Id::unique(("t3_site", number, i)), v, u64::from(smax), 80.0).labelled_by(l.id);
+            if ui.small_button("Remove").clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        f.sites.remove(i);
+    }
+    if ui.add_enabled(f.sites.len() < sys::T3_SITES, egui::Button::new("Add site value")).clicked() {
+        f.sites.push(0);
+    }
+
+    group(ui, "Fallback");
+    egui::Grid::new(("t3_fb", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        let l = ui.label("Hold on the fallback channel (s)");
+        num_field(ui, egui::Id::unique(("t3_hold", number)), &mut f.fallback_hold, 255, 70.0).labelled_by(l.id);
+        ui.end_row();
+    });
+    ui.label(RichText::new("0 seconds uses 30.").size(13.0).color(muted));
+
+    group(ui, "Commands from the network");
+    egui::Grid::new(("t3_cmd", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        check(ui, "Accept Ambient Listening", &mut f.accept_als);
+        check(ui, "Accept a kill", &mut f.accept_kill);
+        check(ui, "Accept a stun", &mut f.accept_stun);
+    });
+
+    group(ui, "Fixed channel plan");
+    egui::Grid::new(("t3_plan", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        let l = ui.label("First channel's transmit MHz");
+        mhz_field(ui, egui::Id::unique(("t3_pbase", number)), &mut f.plan_base_hz, true).labelled_by(l.id);
+        ui.end_row();
+        let l = ui.label("First channel's LCN");
+        num_field(ui, egui::Id::unique(("t3_plcn", number)), &mut f.plan_first_lcn, u64::from(sys::T3_LCN), 80.0).labelled_by(l.id);
+        ui.end_row();
+        let items: Vec<(u8, String)> = SEPARATIONS.iter().enumerate().map(|(i, n)| (i as u8, (*n).to_string())).collect();
+        combo(ui, ("t3_psep", number), "Separation", SEPARATIONS[usize::from(f.plan_sep & 7)], &mut f.plan_sep, &items);
+        let l = ui.label("Duplex split MHz");
+        mhz_field(ui, egui::Id::unique(("t3_psplit", number)), &mut f.plan_split_hz, true).labelled_by(l.id);
+        ui.end_row();
+        check(ui, "Transmit below receive", &mut f.plan_tx_low);
+        check(ui, "Don't learn channels from the control channel", &mut f.plan_no_learn);
+    });
+    ui.label(RichText::new("A base frequency of 0 means no fixed plan.").size(13.0).color(muted));
+}
+
+/// A Tier III system's channels: the LCN, the frequencies, a color code and whether it is a control channel. The
+/// control channels are tried in the order listed.
+fn t3_channels(ui: &mut Ui, s: &mut System, number: u16) {
+    let muted = theme::palette(ui).muted;
+    let at_limit = s.entries.len() >= MAX_ENTRIES;
+    let mut remove: Option<usize> = None;
+    let mut swap: Option<(usize, usize)> = None;
+    group(ui, "Channels");
+    ui.label(RichText::new("The control channels are hunted in the order listed; the system uses the first 4 of its first 8 channels.").size(13.0).color(muted));
+    let idx: Vec<usize> = s.entries.iter().enumerate().filter(|(_, e)| matches!(e.body, EntryBody::T3Channel { .. })).map(|(i, _)| i).collect();
+    egui::Grid::new(("t3_chans", number)).num_columns(8).spacing([12.0, 6.0]).show(ui, |ui| {
+        for t in ["Control", "LCN", "RX MHz", "TX MHz", "Color code", "", "", ""] {
+            ui.label(t);
+        }
+        ui.end_row();
+        for (k, &i) in idx.iter().enumerate() {
+            let e = &mut s.entries[i];
+            let SysEntry { control, body: EntryBody::T3Channel { lcn, rx_hz, tx_hz, cc }, .. } = e else { continue };
+            let l = ui.label(format!("{}", k + 1));
+            ui.checkbox(control, "").labelled_by(l.id);
+            num_field(ui, egui::Id::unique(("t3c_lcn", number, i)), lcn, u64::from(sys::T3_LCN), 60.0);
+            mhz_field(ui, egui::Id::unique(("t3c_rx", number, i)), rx_hz, false);
+            mhz_field(ui, egui::Id::unique(("t3c_tx", number, i)), tx_hz, true);
+            let shown = cc.map_or("System's".to_string(), |c| c.to_string());
+            egui::ComboBox::from_id_salt(("t3c_cc", number, i))
+                .selected_text(shown)
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(cc, None, "System's");
+                    for n in 0..16u8 {
+                        ui.selectable_value(cc, Some(n), n.to_string());
+                    }
+                });
+            ui.horizontal(|ui| {
+                if ui.small_button("Up").clicked() && k > 0 {
+                    swap = Some((i, idx[k - 1]));
+                }
+                if ui.small_button("Down").clicked() && k + 1 < idx.len() {
+                    swap = Some((i, idx[k + 1]));
+                }
+            });
+            if ui.small_button("Remove").clicked() {
+                remove = Some(i);
+            }
+            ui.end_row();
+        }
+    });
+    if ui.add_enabled(!at_limit, egui::Button::new("Add channel")).clicked() {
+        s.entries.push(SysEntry {
+            cls: 0,
+            group: 0xFF,
+            control: true,
+            flags: 0,
+            body: EntryBody::T3Channel { lcn: 1, rx_hz: 0, tx_hz: 0, cc: None },
+            raw: Vec::new(),
+        });
+    }
+    if let Some((a, b)) = swap {
+        s.entries.swap(a, b);
+    }
+    if let Some(i) = remove {
+        s.entries.remove(i);
+    }
+}
+
+/// The key: shown only as set or not set until the user asks (channel-modes.md 8). A key typed in is masked.
+fn key_section(ui: &mut Ui, s: &mut System, number: u16) {
+    let muted = theme::palette(ui).muted;
+    let reveal_id = egui::Id::unique(("t3_reveal", number));
+    // A key shown for one system is hidden again when another is selected.
+    let last_id = egui::Id::unique("t3_reveal_for");
+    if ui.data(|d| d.get_temp::<u16>(last_id)) != Some(number) {
+        ui.data_mut(|d| {
+            d.insert_temp(last_id, number);
+            d.insert_temp(reveal_id, false);
+        });
+    }
+    let revealed = ui.data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
+    let key = s.secret.as_deref().and_then(sys::decode_t3_key);
+    match (&s.secret, &key) {
+        (None, _) => {
+            ui.label(RichText::new("No key.").color(muted));
+        }
+        (Some(_), None) => {
+            ui.label("The stored secret is shorter than 16 octets: it is not a key.");
+        }
+        (Some(_), Some(k)) => {
+            ui.label("A key is set. It is not shown unless you ask.");
+            ui.horizontal(|ui| {
+                if ui.button(if revealed { "Hide key" } else { "Show key" }).clicked() {
+                    ui.data_mut(|d| d.insert_temp(reveal_id, !revealed));
+                }
+                if ui.button("Remove the key").clicked() {
+                    s.secret = None;
+                }
+            });
+            if revealed {
+                ui.monospace(format!("Key  {}", sys::key_hex(&k.key)));
+                ui.monospace(format!("PSN  {}", if k.psn == 0 { "none".to_string() } else { k.psn.to_string() }));
+            }
+        }
+    }
+    // Setting a key: 32 hex digits and an optional PSN, applied with the button.
+    let hex_id = egui::Id::unique(("t3_key_hex", number));
+    let psn_id = egui::Id::unique(("t3_key_psn", number));
+    let mut hex: String = ui.data(|d| d.get_temp(hex_id)).unwrap_or_default();
+    let mut psn: String = ui.data(|d| d.get_temp(psn_id)).unwrap_or_default();
+    egui::Grid::new(("t3_keyset", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+        let l = ui.label("New key (32 hex digits)");
+        ui.add(egui::TextEdit::singleline(&mut hex).password(true).desired_width(300.0)).labelled_by(l.id);
+        ui.end_row();
+        let l = ui.label("PSN (empty for none)");
+        ui.add(egui::TextEdit::singleline(&mut psn).desired_width(100.0)).labelled_by(l.id);
+        ui.end_row();
+    });
+    let parsed = sys::parse_key_hex(&hex);
+    let psn_v: Option<u32> = if psn.trim().is_empty() { Some(0) } else { psn.trim().parse::<u32>().ok().filter(|v| *v <= 0xFF_FFFF) };
+    ui.horizontal(|ui| {
+        let ok = parsed.is_some() && psn_v.is_some();
+        if ui.add_enabled(ok, egui::Button::new("Set the key")).clicked() {
+            if let (Some(k), Some(p)) = (parsed, psn_v) {
+                s.secret = Some(sys::encode_t3_key(&T3Key { key: k, psn: p }, s.secret.as_deref()));
+                hex.clear();
+                psn.clear();
+            }
+        }
+        if !hex.is_empty() && parsed.is_none() {
+            ui.label(RichText::new("32 hex digits").color(theme::palette(ui).warn));
+        }
+        if psn_v.is_none() {
+            ui.label(RichText::new("The PSN is a number up to 16777215").color(theme::palette(ui).warn));
+        }
+    });
+    ui.data_mut(|d| {
+        d.insert_temp(hex_id, hex);
+        d.insert_temp(psn_id, psn);
+    });
 }
