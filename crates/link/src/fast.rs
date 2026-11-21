@@ -5,7 +5,7 @@
 //! CRC-32 sums, LZ4 streams. Reading and writing; INFO is checked against the editor's layout first.
 
 use crate::radio::{LinkError, Radio, Result};
-use rfcps_core::image::{editor_blocks, Image, BLOCK, CODEPLUG_SPAN, FL};
+use rfcps_core::image::{editor_blocks, read_blocks, Image, BLOCK, CODEPLUG_SPAN, FL};
 use std::io::{Read, Write};
 
 const CMD_CODEPLUG: u8 = 0x1C;
@@ -222,7 +222,7 @@ impl<P: Read + Write> Radio<P> {
     /// Reads what the editor needs into an image (blank blocks as 0xFF). `progress(done, total)` is called per block.
     pub fn read_image(&mut self, progress: &mut dyn FnMut(usize, usize)) -> Result<Image> {
         self.checked_info()?;
-        let blocks = editor_blocks();
+        let blocks = read_blocks();
         let mut img = Image::from_bytes(&[]);
         debug_assert_eq!(img.len(), CODEPLUG_SPAN);
         for (i, &addr) in blocks.iter().enumerate() {

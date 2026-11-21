@@ -26,6 +26,9 @@ pub struct Codeplug {
     pub systems: Vec<crate::systems::System>,
     /// The entries of systems that aren't there: kept as found.
     pub orphan_entries: Vec<Vec<u8>>,
+    /// The ID database's header as read (the web editor's `model.iddb`); `None` without a database. Read only: the
+    /// codeplug's own write never touches the database.
+    pub iddb: Option<crate::iddb::Header>,
 }
 
 fn channel_used(b: &[u8], n: usize) -> bool {
@@ -109,6 +112,7 @@ impl Codeplug {
             mode_settings,
             systems,
             orphan_entries,
+            iddb: crate::iddb::read_header(b),
             general: decode_general(b),
             channels,
             vfo,

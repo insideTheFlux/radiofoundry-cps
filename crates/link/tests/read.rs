@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 insideTheFlux
 
-use rfcps_core::image::{editor_blocks, BLOCK};
+use rfcps_core::image::{read_blocks, BLOCK};
 use rfcps_core::records::{channel_addr, CH_SIZE};
 use rfcps_core::{Codeplug, Image};
 use rfcps_link::fake::FakeRadio;
@@ -60,8 +60,8 @@ fn reads_the_image_the_editor_needs() {
     let mut radio = Radio::new(FakeRadio::new(img.bytes()));
     let mut steps = 0;
     let got = radio.read_image(&mut |_, _| steps += 1).unwrap();
-    assert_eq!(steps, editor_blocks().len() + 1);
-    for addr in editor_blocks() {
+    assert_eq!(steps, read_blocks().len() + 1);
+    for addr in read_blocks() {
         assert_eq!(
             &got.bytes()[addr..addr + BLOCK],
             &img.bytes()[addr..addr + BLOCK],
@@ -103,4 +103,20 @@ fn a_block_outside_the_image_is_refused() {
         }) => {}
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_read_brings_the_id_database_header() {
+    use rfcps_core::iddb::{write_n, Record};
+    let mut img = image();
+    let recs = [Record { id: 3100001, text: "Test One".into() }];
+    write_n(&mut img, &recs, 16, usize::MAX).unwrap();
+    let mut radio = Radio::new(FakeRadio::new(img.bytes()));
+    let got = radio.read_image(&mut |_, _| {}).unwrap();
+    let h = Codeplug::decode(&got).iddb.expect("a header");
+    assert_eq!((h.format, h.count), (b'N', 1));
+    // without a database there is none
+    let mut radio = Radio::new(FakeRadio::new(image().bytes()));
+    let got = radio.read_image(&mut |_, _| {}).unwrap();
+    assert!(Codeplug::decode(&got).iddb.is_none());
 }

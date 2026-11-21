@@ -6,7 +6,7 @@
 
 use crate::fast::BLANK_CRC;
 use crate::frame::{self, Parsed};
-use rfcps_core::image::{editor_blocks, BLOCK};
+use rfcps_core::image::{read_blocks, BLOCK};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 
@@ -75,7 +75,7 @@ impl FakeRadio {
     fn block(&self, addr: usize) -> Option<&[u8]> {
         (addr.is_multiple_of(BLOCK)
             && addr + BLOCK <= self.image.len()
-            && editor_blocks().contains(&addr))
+            && read_blocks().contains(&addr))
         .then(|| &self.image[addr..addr + BLOCK])
     }
 

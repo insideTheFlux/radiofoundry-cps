@@ -24,6 +24,9 @@ pub const REGIONS: [(usize, usize); 4] = [
 pub const SETTINGS_AREA: (usize, usize) = (EE + 0x0E000, EE + 0x0F000);
 /// The size of a block the radio's fast protocol moves.
 pub const BLOCK: usize = 0x1000;
+/// The DMR ID database's header (7.5; format C's is 32 bytes): enough to tell whether one is there, its format and
+/// how big it is. A read takes its block too; a write of the codeplug never sends it.
+pub const IDDB_HEADER: (usize, usize) = (FL + 0x30000, FL + 0x30020);
 
 /// The 4 KB blocks a read from a radio needs: the regions above and the settings area, in address order.
 pub fn editor_blocks() -> Vec<usize> {
@@ -35,6 +38,15 @@ pub fn editor_blocks() -> Vec<usize> {
             s += BLOCK;
         }
     }
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// The blocks a read takes: what the editor shows, then the ID database's header block.
+pub fn read_blocks() -> Vec<usize> {
+    let mut v = editor_blocks();
+    v.push(IDDB_HEADER.0 / BLOCK * BLOCK);
     v.sort_unstable();
     v.dedup();
     v
