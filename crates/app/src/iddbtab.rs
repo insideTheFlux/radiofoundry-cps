@@ -5,6 +5,7 @@
 //! "Build from RadioID.net", file mode). The database lives in the document's image; Write to Radio sends it.
 
 use crate::doc::Doc;
+use crate::download::{self, Download};
 use crate::worker::RadioFacts;
 use crate::theme;
 use eframe::egui::{self, Ui};
@@ -37,6 +38,9 @@ pub struct IdDbUi {
     counts: HashMap<String, usize>,
     /// What the inputs selected: the inputs as one string, how many users, and the first few as the radio shows them.
     cache: Option<Cached>,
+    /// A download of the user file in progress, and where it comes from.
+    download: Option<Download>,
+    pub url: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,6 +68,8 @@ impl Default for IdDbUi {
             confirm: None,
             counts: HashMap::new(),
             cache: None,
+            download: None,
+            url: radioid::DOWNLOAD.to_string(),
         }
     }
 }
@@ -109,6 +115,29 @@ impl IdDbUi {
         match std::fs::read(&path) {
             Ok(b) => self.load_users(&String::from_utf8_lossy(&b), name),
             Err(e) => self.message = Some((format!("Could not read {}: {e}", path.display()), true)),
+        }
+    }
+
+    /// Takes what the download has sent; when it is done, the users.
+    fn poll_download(&mut self) {
+        let Some(d) = &mut self.download else { return };
+        let mut done = None;
+        while let Ok(m) = d.rx.try_recv() {
+            match m {
+                download::Msg::Progress(n, t) => {
+                    d.received = n;
+                    d.total = t;
+                }
+                download::Msg::Done(r) => done = Some(r),
+            }
+        }
+        if let Some(r) = done {
+            self.download = None;
+            match r {
+                Ok(text) => self.load_users(&text, "user.csv from RadioID.net".into()),
+                Err(e) if e == "stopped" => self.message = Some(("The download was stopped.".into(), false)),
+                Err(e) => self.message = Some((format!("{e}. Try again later, or open a user.csv you downloaded."), true)),
+            }
         }
     }
 
@@ -161,6 +190,7 @@ impl IdDbUi {
 
 pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
     let pal = theme::palette(ui);
+    st.poll_download();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_max_width(760.0);
         // The current database
@@ -198,14 +228,31 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
         ui.add_space(6.0);
         ui.strong("1  Users");
         ui.horizontal(|ui| {
-            if ui.button("Open user.csv").clicked() {
+            if ui.add_enabled(st.download.is_none(), egui::Button::new("Open user.csv")).clicked() {
                 st.open_file();
             }
-            ui.hyperlink_to("Download user.csv from RadioID.net", radioid::DOWNLOAD);
+            if st.download.is_none() {
+                if ui.button("Download from RadioID.net").clicked() {
+                    st.message = None;
+                    st.download = Some(download::start(st.url.clone(), ui.ctx().clone()));
+                }
+            } else if ui.button("Stop").clicked() {
+                if let Some(d) = &st.download {
+                    d.stop();
+                }
+            }
+            if let Some(d) = &st.download {
+                let mb = |n: u64| format!("{:.1} MB", n as f64 / 1e6);
+                ui.label(match d.total {
+                    Some(t) => format!("Downloading… {} of {}", mb(d.received), mb(t)),
+                    None => format!("Downloading… {}", mb(d.received)),
+                });
+            }
             if let Some(u) = &st.users {
                 ui.label(egui::RichText::new(format!("{} users from {}.", u.len(), st.source)).color(pal.muted));
             }
         });
+        ui.label(egui::RichText::new("Download connects to radioid.net once and sends nothing but the request. Or download user.csv yourself and open it.").color(pal.muted));
 
         ui.add_space(6.0);
         ui.strong("2  Regions");

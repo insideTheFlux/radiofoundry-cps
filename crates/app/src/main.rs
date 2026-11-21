@@ -7,6 +7,7 @@ mod channels;
 mod cli;
 mod contacts;
 mod doc;
+mod download;
 mod exchange;
 mod general;
 mod iddbtab;

@@ -14,8 +14,9 @@ see [Adding a radio](docs/adding-a-radio.md).
 - Reads a radio's codeplug over its programming cable or USB (the fast codeplug protocol), in under a second.
 - Edits channels, zones, contacts, RX group lists and the general settings (including the settings area: ARS server, IP gateway, tones and signaling tones), P25 and NXDN conventional channels (mode, NAC or RAN, squelch, rate) and the P25 and NXDN unit IDs, P25 trunked systems (identity, sites, control channels, channel plan; listen only until you turn the transmit side on) and DMR Tier III systems (network, options, fixed plan, channels, key) with channels on them, DTMF contacts and APRS configurations, with undo, a Problems list (the web editor's
   checks) and the web editor's look, light or dark.
-- Builds the DMR ID database from a RadioID `user.csv` (regions, call sign prefixes, name templates), or adds those users
-  as contacts; the database is sent in its own step after the codeplug.
+- Builds the DMR ID database from a RadioID `user.csv` (downloaded here on a button, or opened from a file; regions, call
+  sign prefixes, name templates), or adds those users as contacts; the database is sent in its own step after the
+  codeplug. This is the only network use: one request to radioid.net, and only when you press the button.
 - Writes to the radio safely: a list of what will change, a backup of the radio's codeplug first, only the changed
   blocks, a refusal if the radio changed since it was read, and a read-back check.
 - Imports a stock DM-32UV backup (the web installer's `.zip`), qdmr YAML codeplugs, CHIRP CSV and CSV tables; exports qdmr YAML, CSV tables and CHIRP CSV.

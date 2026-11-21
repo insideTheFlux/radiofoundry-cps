@@ -220,6 +220,41 @@ fn the_database_format_follows_what_the_radio_reads_and_an_old_one_can_be_conver
     assert_eq!(h.state().doc.as_ref().unwrap().cp.iddb.as_ref().unwrap().format, b'C');
 }
 
+#[test]
+fn the_user_file_downloads_on_a_click_and_a_failure_is_said() {
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.url = download::tests::serve(
+        "HTTP/1.1 200 OK\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n",
+        USERS.as_bytes().to_vec(),
+    );
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    h.get_by_label("Open a RadioID user file to begin.");
+    click(&mut h, "Download from RadioID.net");
+    for _ in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run();
+        if h.query_by_label_contains("3 users from").is_some() {
+            break;
+        }
+    }
+    h.get_by_label_contains("3 users from user.csv from RadioID.net.");
+    h.get_by_label_contains("3 of 3 users selected.");
+    // a server that is not there
+    h.state_mut().iddb.url = "http://127.0.0.1:1/user.csv".into();
+    h.run();
+    click(&mut h, "Download from RadioID.net");
+    for _ in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run();
+        if h.query_by_label_contains("could not reach").is_some() {
+            break;
+        }
+    }
+    h.get_by_label_contains("could not reach");
+}
+
 fn disabled_by_prefix(h: &H, prefix: &str) -> bool {
     h.get_by_label_contains(prefix).accesskit_node().is_disabled()
 }

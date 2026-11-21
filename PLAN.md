@@ -16,7 +16,7 @@ follows the specs in its `docs/spec/`. First radio: the DM-32UV.
 | Read and write over the programming cable (the fast codeplug protocol) | done: only changed blocks, a backup first, a refusal if the radio changed, a read-back check |
 | Import and export: stock DM-32UV backup, qdmr YAML, CHIRP CSV, CSV tables | done, matches the web editor |
 | DMR ID database: formats N and C, built from a RadioID `user.csv`; a compact one goes to a radio that reads only N as N | done in the editor and link, matching the web editor; not yet tried on a radio |
-| RadioID download | not yet |
+| RadioID download: the user file from radioid.net, on a button (rustls; the API fetch of single regions is not ported, the whole file works for any region) | done |
 | Packaging: Windows `.zip`, Linux `.tar.gz` and `.deb`, built by GitHub Actions on a `v*` tag | done |
 
 Not edited, as in the web editor: targets, target lists and traffic keys (kept byte for byte), DTMF signaling.

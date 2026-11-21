@@ -41,7 +41,7 @@ DTMF contacts and APRS configurations have their own tabs and an APRS choice on 
 and delete them, and a channel picks a configuration, which a delete clears. CSV (`dtmf-contacts.csv`, `aprs.csv`, and
 the channel table's APRS column naming the configuration) and qdmr (`positioning` APRS systems, `gnss` fixed position,
 DTMF contacts after the digital ones) both match the web editor, and a link test writes both tables to the software radio.
-The ID database tab is covered by GUI tests (build a database from a user file, replace it after a question, remove it, undo, and add the users as contacts once) and by tests of the document's history; the link tests write the database to the software radio with the header block first erased and last written.
+The download of the user file is tested against a small server on this computer (a whole file with progress, an error status, a stop, nothing listening); one ignored test fetches the real file over TLS (`cargo test -p rfcps radioid_net -- --ignored`, about 17 MB). The ID database tab is covered by GUI tests (build a database from a user file, replace it after a question, remove it, undo, and add the users as contacts once) and by tests of the document's history; the link tests write the database to the software radio with the header block first erased and last written.
 Save image
 asks before it carries a secret key (a GUI test; the file dialog itself is not driven).
 
