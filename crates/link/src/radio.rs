@@ -28,6 +28,8 @@ pub enum LinkError {
     Layout(String),
     /// The codeplug's settings area and the radio's keys don't fit together (the area is full).
     Settings(&'static str),
+    /// The ID database reaches past the end of the radio's image (the address it needs, the radio's end).
+    IddbTooBig(usize, u32),
 }
 
 impl std::fmt::Display for LinkError {
@@ -35,6 +37,10 @@ impl std::fmt::Display for LinkError {
         match self {
             LinkError::Io(e) => write!(f, "serial port: {e}"),
             LinkError::Layout(m) => write!(f, "this radio's codeplug layout is not supported: {m}"),
+            LinkError::IddbTooBig(need, end) => write!(
+                f,
+                "the ID database needs the radio's image up to {need:#x}, which ends at {end:#x}"
+            ),
             LinkError::Settings(e) => write!(f, "the codeplug's settings area: {e}"),
             LinkError::Timeout => write!(f, "the radio did not answer"),
             LinkError::Status {

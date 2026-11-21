@@ -6,6 +6,7 @@
 
 use crate::fast::BLANK_CRC;
 use crate::frame::{self, Parsed};
+use rfcps_core::iddb::AREA1;
 use rfcps_core::image::{read_blocks, BLOCK};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -41,6 +42,8 @@ pub struct FakeRadio {
     pub info_layout: Option<(u8, u32, u32, u32)>,
     /// Refuse the next END with this reason, once (the host should send the block again).
     pub refuse_next_end: Option<u8>,
+    /// Serve and take the blocks of the ID database too (a radio whose image reaches that far).
+    pub serve_iddb: bool,
     /// The blocks written so far, in order.
     pub written_blocks: Vec<usize>,
 }
@@ -58,6 +61,7 @@ impl FakeRadio {
             stage_max: 0,
             info_layout: None,
             refuse_next_end: None,
+            serve_iddb: false,
             written_blocks: Vec::new(),
         }
     }
@@ -75,7 +79,7 @@ impl FakeRadio {
     fn block(&self, addr: usize) -> Option<&[u8]> {
         (addr.is_multiple_of(BLOCK)
             && addr + BLOCK <= self.image.len()
-            && read_blocks().contains(&addr))
+            && (read_blocks().contains(&addr) || (self.serve_iddb && addr >= AREA1)))
         .then(|| &self.image[addr..addr + BLOCK])
     }
 

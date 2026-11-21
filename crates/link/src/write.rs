@@ -7,6 +7,7 @@
 
 use crate::fast::Block;
 use crate::radio::{LinkError, Radio, Result};
+use rfcps_core::iddb;
 use rfcps_core::image::{Image, BLOCK, REGIONS, SETTINGS_AREA};
 use rfcps_core::kv;
 use std::collections::HashMap;
@@ -207,6 +208,102 @@ impl<P: Read + Write> Radio<P> {
         }
         Ok(WriteReport {
             blocks: jobs.len(),
+            stream_bytes: bytes,
+        })
+    }
+
+    /// The blocks of the ID database to send: each block its ranges touch where what the image says differs from
+    /// what the radio holds (a block the database only partly fills keeps the radio's bytes after it). When anything
+    /// changes the header's block is in the list (iddb-compact.md 4.3). The database is never read back first: it can
+    /// be megabytes.
+    pub fn plan_iddb(&mut self, image: &Image) -> Result<Vec<(usize, Vec<u8>)>> {
+        let ranges = iddb::ranges(image.bytes());
+        let addrs = blocks_of(&ranges);
+        let sums = self.sums_of(&addrs)?;
+        let mut jobs = Vec::new();
+        for a in addrs {
+            let (crc, blank) = sums[&a];
+            let want = |lo: usize, hi: usize| -> Vec<u8> {
+                (lo..hi).map(|i| image.bytes().get(i).copied().unwrap_or(0xFF)).collect()
+            };
+            let next = if covers(&ranges, a) {
+                want(a, a + BLOCK)
+            } else {
+                let mut merged = self.block_bytes(a, blank)?;
+                for &(s, e) in &ranges {
+                    let (lo, hi) = (s.max(a), e.min(a + BLOCK));
+                    if lo < hi {
+                        merged[lo - a..hi - a].copy_from_slice(&want(lo, hi));
+                    }
+                }
+                merged
+            };
+            if crc32fast::hash(&next) != crc {
+                jobs.push((a, next));
+            }
+        }
+        let head = iddb::AREA1 / BLOCK * BLOCK;
+        if !jobs.is_empty() && !jobs.iter().any(|(a, _)| *a == head) {
+            jobs.insert(0, (head, image.view(head, BLOCK).to_vec()));
+        }
+        Ok(jobs)
+    }
+
+    /// Writes the ID database in `image` (what `iddb::write_n` or `erase` left there) in one direct session: the
+    /// header's block first with the header erased, the rest, then the header's block as it should be, so a write cut
+    /// short leaves no database rather than a new header over old records (iddb-compact.md 4.3). Read back after.
+    /// `progress(done, total)` is called per block (the header's block counts twice).
+    pub fn write_iddb(
+        &mut self,
+        image: &Image,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<WriteReport> {
+        let info = self.checked_info()?;
+        let need = iddb::end(image.bytes());
+        if need > info.image_end as usize {
+            return Err(LinkError::IddbTooBig(need, info.image_end));
+        }
+        let jobs = self.plan_iddb(image)?;
+        if jobs.is_empty() {
+            return Ok(WriteReport {
+                blocks: 0,
+                stream_bytes: 0,
+            });
+        }
+        let head = iddb::AREA1 / BLOCK * BLOCK;
+        let (heads, rest): (Vec<_>, Vec<_>) = jobs.iter().cloned().partition(|(a, _)| *a == head);
+        let (_, last) = heads.into_iter().next().expect("the header's block is planned");
+        let mut first = last.clone();
+        first[iddb::AREA1 - head..iddb::AREA1 - head + 0x20].fill(0xFF);
+        let order: Vec<(usize, Vec<u8>)> = std::iter::once((head, first))
+            .chain(rest)
+            .chain(std::iter::once((head, last)))
+            .collect();
+        self.codeplug_begin(false)?;
+        let mut bytes = 0;
+        for (i, (a, data)) in order.iter().enumerate() {
+            progress(i, order.len());
+            match self.codeplug_write_block(*a as u32, data, usize::from(info.data_per_write)) {
+                Ok(n) => bytes += n,
+                Err(e) => {
+                    let _ = self.codeplug_abort();
+                    return Err(e);
+                }
+            }
+        }
+        progress(order.len(), order.len());
+        self.codeplug_commit(Duration::from_secs(10))?;
+        let addrs: Vec<usize> = jobs.iter().map(|(a, _)| *a).collect();
+        let sums = self.sums_of(&addrs)?;
+        let bad = jobs
+            .iter()
+            .filter(|(a, d)| sums[a].0 != crc32fast::hash(d))
+            .count();
+        if bad > 0 {
+            return Err(LinkError::VerifyFailed(bad));
+        }
+        Ok(WriteReport {
+            blocks: order.len(),
             stream_bytes: bytes,
         })
     }

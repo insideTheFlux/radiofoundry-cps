@@ -257,6 +257,25 @@ pub fn extent(b: &[u8]) -> usize {
     }
 }
 
+/// The image address a write of the database must reach: its extent, or just the header when there is none (an erased
+/// database).
+pub fn end(b: &[u8]) -> usize {
+    match extent(b) {
+        0 => AREA1 + 0x20,
+        e => e,
+    }
+}
+
+/// The database's bytes in an image: the header and records in area 1, the rest in area 2.
+pub fn ranges(b: &[u8]) -> Vec<(usize, usize)> {
+    let top = end(b);
+    let mut v = vec![(AREA1, top.min(AREA1 + AREA1_SIZE))];
+    if top > AREA2 {
+        v.push((AREA2, top));
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
