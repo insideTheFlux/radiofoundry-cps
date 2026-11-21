@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (c) 2026 The RadioFoundry Authors
 // Copyright (c) 2026 insideTheFlux
 
 //! The debug link's frame (RadioFoundry `docs/spec/debuglink.md` 2): `A5 5A`, command, sequence number, payload

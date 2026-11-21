@@ -3,13 +3,19 @@
 A native codeplug editor for [RadioFoundry](https://github.com/RadioFoundry/RadioFoundry) radios, written in Rust: a
 Windows 11 `.exe` and a Linux program, no browser. First radio: the DM-32UV.
 
-Private project for now. Anything ported from RadioFoundry keeps its MIT notice (see `LICENSE`, `NOTICE.md`).
+An independent editor, not an official RadioFoundry release. MIT licensed. Anything ported from RadioFoundry keeps its
+notice (see `LICENSE`, `AUTHORS`, `CONTRIBUTORS` and `NOTICE.md`).
+
+**Tested on one radio:** the DM-32UV. Other RadioFoundry radios use other codeplug layouts and are not supported yet;
+see [Adding a radio](docs/adding-a-radio.md).
 
 ## What it does
 
 - Reads a radio's codeplug over its programming cable or USB (the fast codeplug protocol), in under a second.
 - Edits channels, zones, contacts, RX group lists and the general settings (including the settings area: ARS server, IP gateway, tones and signaling tones), P25 and NXDN conventional channels (mode, NAC or RAN, squelch, rate) and the P25 and NXDN unit IDs, P25 trunked systems (identity, sites, control channels, channel plan; listen only until you turn the transmit side on) and DMR Tier III systems (network, options, fixed plan, channels, key) with channels on them, DTMF contacts and APRS configurations, with undo, a Problems list (the web editor's
   checks) and the web editor's look, light or dark.
+- Builds the DMR ID database from a RadioID `user.csv` (regions, call sign prefixes, name templates), or adds those users
+  as contacts; the database is sent in its own step after the codeplug.
 - Writes to the radio safely: a list of what will change, a backup of the radio's codeplug first, only the changed
   blocks, a refusal if the radio changed since it was read, and a read-back check.
 - Imports a stock DM-32UV backup (the web installer's `.zip`), qdmr YAML codeplugs, CHIRP CSV and CSV tables; exports qdmr YAML, CSV tables and CHIRP CSV.
@@ -45,4 +51,5 @@ program makes SmartScreen ask "Run anyway?" once.
 | `rfcps-link` | the serial link: the debug link's frames, the fast codeplug read and write, and a software radio for tests |
 | `rfcps` | the window |
 
-See `PLAN.md` for scope and phases and `docs/testing.md` for how the real-radio checks work.
+See `PLAN.md` for scope and status, `docs/testing.md` for how the tests work, and `docs/adding-a-radio.md` for what a
+new radio needs.

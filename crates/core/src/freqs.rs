@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (c) 2026 The RadioFoundry Authors
 // Copyright (c) 2026 insideTheFlux
 
 //! How a channel's two frequencies go together, the rules of RadioFoundry's web editor: typing RX takes TX along when

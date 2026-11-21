@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (c) 2026 The RadioFoundry Authors
 // Copyright (c) 2026 insideTheFlux
 
 //! The fast codeplug protocol (RadioFoundry `docs/spec/cps-fast.md`): the debug link's CODEPLUG command, 4 KB blocks,

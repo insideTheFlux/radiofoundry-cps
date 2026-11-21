@@ -41,6 +41,7 @@ DTMF contacts and APRS configurations have their own tabs and an APRS choice on 
 and delete them, and a channel picks a configuration, which a delete clears. CSV (`dtmf-contacts.csv`, `aprs.csv`, and
 the channel table's APRS column naming the configuration) and qdmr (`positioning` APRS systems, `gnss` fixed position,
 DTMF contacts after the digital ones) both match the web editor, and a link test writes both tables to the software radio.
+The ID database tab is covered by GUI tests (build a database from a user file, replace it after a question, remove it, undo, and add the users as contacts once) and by tests of the document's history; the link tests write the database to the software radio with the header block first erased and last written.
 Save image
 asks before it carries a secret key (a GUI test; the file dialog itself is not driven).
 
@@ -50,11 +51,15 @@ on a radio cover it), and pixel snapshots (`egui_kittest`'s `snapshot` feature, 
 ## Against the web editor on a real image (local only)
 
 The decoder and encoder are ported from RadioFoundry's web editor. Three more tests compare them with it on a real
-radio image. They run only when these variables are set, and otherwise pass without checking anything:
+radio image. They run only when these variables are set, and otherwise pass without checking anything. The scripts that
+make the web editor's side (named in the table) are small Node scripts over the modules in `site/static/js/codeplug/` of the
+RadioFoundry repository; they are not part of this repository, and neither is `tools/cps_fast.py` (RadioFoundry's). To
+read an image from a radio here, use `rfcps --read PORT out.bin`.
+
 
 | Variable | What |
 |---|---|
-| `RFCPS_IMAGE` | a codeplug image read from a radio (`tools/cps_fast.py read`, `--regions radio`) |
+| `RFCPS_IMAGE` | a codeplug image read from a radio (`rfcps --read PORT out.bin`, or RadioFoundry's `tools/cps_fast.py read --regions radio`) |
 | `RFCPS_GOLDEN` | the web editor's decode of it, as JSON (`golden.mjs`, a small Node script over `model.js decode()`) |
 | `RFCPS_EDITED_JS` | the web editor's encode of a fixed set of edits to the same image (`edit_js.mjs`) |
 | `RFCPS_KV_DIR` | the web editor's settings-area sectors for fixed key edits, with the radio-merge case (`edit_kv.mjs`, a small Node script over `kv.js` `putKeys` and `areaForWrite`) |
