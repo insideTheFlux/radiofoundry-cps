@@ -51,8 +51,8 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut usize) {
                 .collect();
             let i = *selected;
             ui.horizontal(|ui| {
-                ui.label("Name");
-                name_edit(ui, &mut cp.zones[i].name, 16, 160.0);
+                let l = ui.label("Name");
+                name_edit(ui, &mut cp.zones[i].name, 16, 160.0).labelled_by(l.id);
                 if ui.button("Move up").clicked() && i > 0 {
                     cp.zones.swap(i, i - 1);
                     *selected = i - 1;
@@ -70,7 +70,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut usize) {
                 let full = zone.channels.len() >= 80;
                 let in_zone = &zone.channels;
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("add_member")
+                    let add = egui::ComboBox::from_id_salt("add_member")
                         .selected_text("Add a channel…")
                         .width(220.0)
                         .show_ui(ui, |ui| {
@@ -83,6 +83,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut usize) {
                                 }
                             }
                         });
+                    add.response.accessible_name("Add a channel to the zone");
                     ui.label(format!("{} of 80 channels", zone.channels.len()));
                 });
                 ui.add_space(4.0);

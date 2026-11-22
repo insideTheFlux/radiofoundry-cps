@@ -86,6 +86,8 @@ for seed in $(seq 1 "${DIFF_SEEDS:-3}"); do
   RFCPS_FUZZ_DIR="$out/fuzz$seed" \
     cargo test -p rfcps-core --test differential -- --nocapture 2>&1 | tee -a "$out/differential.log" | grep -E "^test |test result|mismatch|panicked" || true
 done
+RFCPS_IMAGE="$out/base.bin" \
+  cargo test -p rfcps a_real_image_draws_on_every_tab 2>&1 | tee -a "$out/app.log" | grep -E "^test |test result|panicked" || true
 cargo test -p rfcps-link --test lz4_spec 2>&1 | tee "$out/lz4.log" | grep -E "^test |test result" || true
 
 passed=$(cat "$out/golden.log" "$out/app.log" "$out/differential.log" "$out/lz4.log" | sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' | awk '{n+=$1} END {print n+0}')

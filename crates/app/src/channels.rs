@@ -160,13 +160,15 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                             ui.label(number.to_string());
                         });
                         row.col(|ui| {
-                            let r = name_edit(ui, &mut c.name, 16, 166.0);
+                            let r = name_edit(ui, &mut c.name, 16, 166.0)
+                                .accessible_name(format!("Name, channel {number}"));
                             hit |= r.gained_focus();
                         });
                         row.col(|ui| {
                             let listen = listen_band(c.rx_hz).is_some();
                             let (r, v) =
                                 freq_edit(ui, ui.scope_id().with(("rx_hz", number)), c.rx_hz, true);
+                            let r = r.accessible_name(format!("RX MHz, channel {number}"));
                             hit |= r.gained_focus();
                             if let Some(v) = v {
                                 set_rx(c, v);
@@ -180,16 +182,21 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                                 c.tx_hz,
                                 listen_band(c.rx_hz).is_none(),
                             );
+                            let r = r.accessible_name(format!("TX MHz, channel {number}"));
                             hit |= r.gained_focus();
                             if let Some(v) = v {
                                 set_tx(c, v);
                             }
                         });
                         row.col(|ui| {
-                            hit |= mode_combo(ui, c, &cp.systems, ("mode", number)).clicked();
+                            hit |= mode_combo(ui, c, &cp.systems, ("mode", number))
+                                .accessible_name(format!("Mode, channel {number}"))
+                                .clicked();
                         });
                         row.col(|ui| {
-                            hit |= power_combo(ui, c, ("power", number)).clicked();
+                            hit |= power_combo(ui, c, ("power", number))
+                                .accessible_name(format!("Power, channel {number}"))
+                                .clicked();
                         });
                         row.col(|ui| {
                             hit |= tone_field(
@@ -197,6 +204,7 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                                 ui.scope_id().with(("rx_tone", number)),
                                 &mut c.rx_tone,
                                 70.0,
+                                format!("RX tone, channel {number}"),
                             );
                         });
                         row.col(|ui| {
@@ -205,11 +213,13 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                                 ui.scope_id().with(("tx_tone", number)),
                                 &mut c.tx_tone,
                                 70.0,
+                                format!("TX tone, channel {number}"),
                             );
                         });
                         row.col(|ui| {
                             ui.add_enabled_ui(c.mode == Mode::Dmr, |ui| {
                                 hit |= contact_combo(ui, c, &choices.contacts, ("contact", number))
+                                    .accessible_name(format!("TX contact, channel {number}"))
                                     .clicked();
                             });
                         });
@@ -305,8 +315,9 @@ fn contact_combo(
 }
 
 /// A tone field; true when it took focus.
-fn tone_field(ui: &mut Ui, id: egui::Id, value: &mut String, width: f32) -> bool {
+fn tone_field(ui: &mut Ui, id: egui::Id, value: &mut String, width: f32, name: String) -> bool {
     let (r, v) = checked_text(ui, id, value.clone(), width, parse_tone);
+    let r = r.accessible_name(name);
     if let Some(v) = v {
         *value = v;
     }
@@ -340,30 +351,32 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
         .num_columns(2)
         .spacing([14.0, 9.0])
         .show(ui, |ui| {
-            ui.label("Name");
-            name_edit(ui, &mut c.name, 16, 200.0);
+            let l = ui.label("Name");
+            name_edit(ui, &mut c.name, 16, 200.0).labelled_by(l.id);
             ui.end_row();
             let l = ui.label("Mode");
             mode_combo(ui, c, &cp.systems, ("dmode", number)).labelled_by(l.id);
             ui.end_row();
-            ui.label("Power");
-            power_combo(ui, c, ("dpower", number));
+            let l = ui.label("Power");
+            power_combo(ui, c, ("dpower", number)).labelled_by(l.id);
             ui.end_row();
-            ui.label("RX MHz");
+            let l = ui.label("RX MHz");
             // A channel of a kind that runs on a system takes its system's control channel's frequencies.
             let own = c.tagged.as_ref().is_none_or(|t| modes::own_freqs(t.kind));
-            let (_, v) = freq_edit(ui, egui::Id::unique(("d_rx", number)), c.rx_hz, own);
+            let (r, v) = freq_edit(ui, egui::Id::unique(("d_rx", number)), c.rx_hz, own);
+            r.labelled_by(l.id);
             if let Some(v) = v {
                 set_rx(c, v);
             }
             ui.end_row();
-            ui.label("TX MHz");
-            let (_, v) = freq_edit(
+            let l = ui.label("TX MHz");
+            let (r, v) = freq_edit(
                 ui,
                 egui::Id::unique(("d_tx", number)),
                 c.tx_hz,
                 listen.is_none() && own,
             );
+            r.labelled_by(l.id);
             if let Some(v) = v {
                 set_tx(c, v);
             }
@@ -402,14 +415,14 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
         .num_columns(2)
         .spacing([14.0, 9.0])
         .show(ui, |ui| {
-            ui.label("TX Timeout (s)");
+            let l = ui.label("TX Timeout (s)");
             let id = egui::Id::unique(("d_tot", number));
             let shown = if c.tot == 0 {
                 String::new()
             } else {
                 c.tot.to_string()
             };
-            let (_, v) = checked_text(ui, id, shown, 100.0, |s| {
+            let (r, v) = checked_text(ui, id, shown, 100.0, |s| {
                 let t = s.trim();
                 if t.is_empty() {
                     return Some(0u16);
@@ -419,6 +432,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                     .filter(|v| *v <= 3825)
                     .map(|v| v.div_ceil(15) * 15)
             });
+            r.labelled_by(l.id);
             if let Some(v) = v {
                 c.tot = v;
             }
@@ -437,17 +451,18 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 let mut rx_only = c.rx_only || listen.is_some();
                 if ui
                     .add_enabled(listen.is_none(), egui::Checkbox::new(&mut rx_only, ""))
+                    .labelled_by(l.id)
                     .changed()
                 {
                     c.rx_only = rx_only;
                 }
             }
             ui.end_row();
-            ui.label("Zone Scan Skip");
-            ui.checkbox(&mut c.zone_skip, "");
+            let l = ui.label("Zone Scan Skip");
+            ui.checkbox(&mut c.zone_skip, "").labelled_by(l.id);
             ui.end_row();
-            ui.label("All-Channel Scan Skip");
-            ui.checkbox(&mut c.all_skip, "");
+            let l = ui.label("All-Channel Scan Skip");
+            ui.checkbox(&mut c.all_skip, "").labelled_by(l.id);
             ui.end_row();
         });
 
@@ -459,14 +474,15 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             .num_columns(2)
             .spacing([14.0, 9.0])
             .show(ui, |ui| {
-                ui.label("Bandwidth kHz");
-                egui::ComboBox::from_id_salt(("dbw", number))
+                let l = ui.label("Bandwidth kHz");
+                let cb = egui::ComboBox::from_id_salt(("dbw", number))
                     .selected_text(if c.bw == 25.0 { "25 kHz" } else { "12.5 kHz" })
                     .width(100.0)
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut c.bw, 12.5, "12.5 kHz");
                         ui.selectable_value(&mut c.bw, 25.0, "25 kHz");
                     });
+                cb.response.labelled_by(l.id);
                 ui.end_row();
                 ui.label("RX Tone");
                 tone_field(
@@ -474,6 +490,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                     egui::Id::unique(("d_rxt", number)),
                     &mut c.rx_tone,
                     100.0,
+                    format!("RX tone, channel {number}"),
                 );
                 ui.end_row();
                 ui.label("TX Tone");
@@ -482,10 +499,11 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                     egui::Id::unique(("d_txt", number)),
                     &mut c.tx_tone,
                     100.0,
+                    format!("TX tone, channel {number}"),
                 );
                 ui.end_row();
-                ui.label("Squelch");
-                egui::ComboBox::from_id_salt(("dsq", number))
+                let l = ui.label("Squelch");
+                let cb = egui::ComboBox::from_id_salt(("dsq", number))
                     .selected_text(if c.squelch == 0 {
                         "Radio Default".to_string()
                     } else {
@@ -498,15 +516,16 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                             ui.selectable_value(&mut c.squelch, n, n.to_string());
                         }
                     });
+                cb.response.labelled_by(l.id);
                 ui.end_row();
                 let l = ui.label("APRS");
                 aprs_combo(ui, c, choices, ("faprs", number)).labelled_by(l.id);
                 ui.end_row();
-                ui.label("VOX Allowed");
-                ui.checkbox(&mut c.vox, "");
+                let l = ui.label("VOX Allowed");
+                ui.checkbox(&mut c.vox, "").labelled_by(l.id);
                 ui.end_row();
-                ui.label("1750 Hz Tone Burst");
-                ui.checkbox(&mut c.tone_burst, "");
+                let l = ui.label("1750 Hz Tone Burst");
+                ui.checkbox(&mut c.tone_burst, "").labelled_by(l.id);
                 ui.end_row();
             });
         ui.label(
@@ -520,8 +539,8 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             .num_columns(2)
             .spacing([14.0, 9.0])
             .show(ui, |ui| {
-                ui.label("Color Code");
-                egui::ComboBox::from_id_salt(("dcc", number))
+                let l = ui.label("Color Code");
+                let cb = egui::ComboBox::from_id_salt(("dcc", number))
                     .selected_text(c.color_code.to_string())
                     .width(70.0)
                     .show_ui(ui, |ui| {
@@ -529,23 +548,25 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                             ui.selectable_value(&mut c.color_code, n, n.to_string());
                         }
                     });
+                cb.response.labelled_by(l.id);
                 ui.end_row();
-                ui.label("Timeslot");
-                egui::ComboBox::from_id_salt(("dts", number))
+                let l = ui.label("Timeslot");
+                let cb = egui::ComboBox::from_id_salt(("dts", number))
                     .selected_text(c.timeslot.to_string())
                     .width(70.0)
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut c.timeslot, 1, "1");
                         ui.selectable_value(&mut c.timeslot, 2, "2");
                     });
+                cb.response.labelled_by(l.id);
                 ui.end_row();
-                ui.label("TX Contact");
-                contact_combo(ui, c, &choices.contacts, ("dcontact", number));
+                let l = ui.label("TX Contact");
+                contact_combo(ui, c, &choices.contacts, ("dcontact", number)).labelled_by(l.id);
                 ui.end_row();
                 let l = ui.label("APRS");
                 aprs_combo(ui, c, choices, ("daprs", number)).labelled_by(l.id);
                 ui.end_row();
-                ui.label("RX Group List");
+                let l = ui.label("RX Group List");
                 let shown = if c.rx_list == 0 {
                     "none".to_string()
                 } else {
@@ -555,7 +576,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                         .find(|(n, _)| *n == c.rx_list)
                         .map_or(format!("#{}", c.rx_list), |(_, n)| n.clone())
                 };
-                egui::ComboBox::from_id_salt(("dlist", number))
+                let cb = egui::ComboBox::from_id_salt(("dlist", number))
                     .selected_text(shown)
                     .width(160.0)
                     .truncate()
@@ -565,15 +586,16 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                             ui.selectable_value(&mut c.rx_list, *n, name);
                         }
                     });
+                cb.response.labelled_by(l.id);
                 ui.end_row();
-                ui.label("Channel DMR ID");
+                let l = ui.label("Channel DMR ID");
                 let id = egui::Id::unique(("d_id", number));
                 let shown = if c.dmr_id == 0 {
                     String::new()
                 } else {
                     c.dmr_id.to_string()
                 };
-                let (_, v) = checked_text(ui, id, shown, 120.0, |s| {
+                let (r, v) = checked_text(ui, id, shown, 120.0, |s| {
                     let t = s.trim();
                     if t.is_empty() {
                         Some(0u32)
@@ -581,12 +603,13 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                         t.parse::<u32>().ok().filter(|v| *v <= 16_777_215)
                     }
                 });
+                r.labelled_by(l.id);
                 if let Some(v) = v {
                     c.dmr_id = v;
                 }
                 ui.end_row();
-                ui.label("Force Direct Mode");
-                ui.checkbox(&mut c.dmo, "");
+                let l = ui.label("Force Direct Mode");
+                ui.checkbox(&mut c.dmo, "").labelled_by(l.id);
                 ui.end_row();
             });
     }

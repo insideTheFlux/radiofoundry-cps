@@ -101,7 +101,9 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) -> bool 
                     ui.label(n.to_string());
                 });
                 row.col(|ui| {
-                    hit |= name_edit(ui, &mut c.name, 16, 176.0).gained_focus();
+                    hit |= name_edit(ui, &mut c.name, 16, 176.0)
+                        .accessible_name(format!("Name, contact {n}"))
+                        .gained_focus();
                 });
                 row.col(|ui| {
                     let id = ui.scope_id().with(("cid", n));
@@ -112,6 +114,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) -> bool 
                                 .ok()
                                 .filter(|v| (1..=16_777_215).contains(v))
                         });
+                        let r = r.accessible_name(format!("DMR ID, contact {n}"));
                         hit |= r.gained_focus();
                         if let Some(v) = v {
                             c.id = v;
@@ -128,6 +131,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) -> bool 
                             }
                         })
                         .response
+                        .accessible_name(format!("Call type, contact {n}"))
                         .clicked();
                 });
                 row.col(|ui| {
@@ -147,6 +151,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) -> bool 
                             }
                         })
                         .response
+                        .accessible_name(format!("Timeslot, contact {n}"))
                         .clicked();
                 });
                 if hit || row.response().clicked() {

@@ -41,8 +41,8 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut usize) {
             let i = *selected;
             let number = list.number;
             ui.horizontal(|ui| {
-                ui.label("Name");
-                name_edit(ui, &mut cp.rx_lists[i].name, 16, 160.0);
+                let l = ui.label("Name");
+                name_edit(ui, &mut cp.rx_lists[i].name, 16, 160.0).labelled_by(l.id);
                 if ui.button("Delete list").clicked() {
                     cp.rx_lists.remove(i);
                     for c in &mut cp.channels {
@@ -58,13 +58,14 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut usize) {
             }
             let full = list.contacts.len() >= 32;
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("add_list_member").selected_text("Add a contact…").width(240.0).show_ui(ui, |ui| {
+                let add = egui::ComboBox::from_id_salt("add_list_member").selected_text("Add a contact…").width(240.0).show_ui(ui, |ui| {
                     for (n, name) in names.iter().filter(|(n, _)| !list.contacts.contains(n)) {
                         if ui.add_enabled(!full, egui::Button::new(format!("{n}  {name}"))).clicked() {
                             cp.rx_lists[i].contacts.push(*n);
                         }
                     }
                 });
+                add.response.accessible_name("Add a contact to the list");
                 ui.label(RichText::new(format!("{} of 32 contacts", list.contacts.len())).color(muted));
             });
             ui.add_space(4.0);

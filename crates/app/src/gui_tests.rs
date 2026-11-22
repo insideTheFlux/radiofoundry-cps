@@ -455,11 +455,8 @@ fn a_real_image_draws_on_every_tab() {
     let mut app = App::with_ports(Vec::new());
     app.open_image(&bytes, "real.bin".into());
     app.doc.as_mut().unwrap().from_file = true;
-    // Known gap: the Channels table's text fields and drop-downs have no accessible names (about a hundred for a
-    // full radio), so the harness's accessibility check stays off here. The tests above keep it on.
     let mut h = Harness::builder()
         .with_size(egui::vec2(1240.0, 680.0))
-        .with_accessibility_check(false)
         .build_eframe(move |cc| {
             theme::apply(&cc.egui_ctx);
             app
@@ -601,7 +598,6 @@ fn harness_with_channel_sized(tweak: impl FnOnce(&mut Codeplug), height: f32) ->
     app.channel = Some(1);
     let mut h = Harness::builder()
         .with_size(egui::vec2(1240.0, height))
-        .with_accessibility_check(false)
         .build_eframe(move |cc| {
             theme::apply(&cc.egui_ctx);
             app

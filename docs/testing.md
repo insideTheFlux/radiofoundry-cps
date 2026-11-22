@@ -11,8 +11,14 @@ tab, the Import and Export menus, the confirm and notice dialogs, the theme butt
 write-failed banner.
 
 The harness also fails a test when a widget has no accessible name, which is how the port chooser and the General tab's
-fields were found. The Channels table still has unnamed fields (about a hundred on a full radio), so the real-image test
-switches that check off.
+fields were found. Every tab now passes it, including the Channels, Contacts, DTMF and Systems tables (each cell is named
+"column, row", for example "RX MHz, channel 5"), and the walk-through of a full image runs with the check on.
+
+The program publishes its controls to screen readers through AccessKit (AT-SPI on Linux, UI Automation on Windows).
+`tools/a11y_check.py` reads that from a running copy on Linux and reports how many controls have no name (needs
+accessibility switched on for the session; see the script). It was run against a 39-channel image: 0 unnamed controls,
+after 112 before the cells were named. How it sounds in Orca or Narrator has not been checked; the window frame itself still
+reports an empty name.
 
 ```
 cargo test -p rfcps gui                              # the synthetic tests

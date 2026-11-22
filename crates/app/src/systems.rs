@@ -318,8 +318,8 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
             let SysEntry { group, body: EntryBody::P25Site { rfss, site }, .. } = e else { continue };
             let l = ui.label(format!("{group}"));
             num_field(ui, egui::Id::unique(("site_no", number, i)), group, 254, 60.0).labelled_by(l.id);
-            opt_byte(ui, egui::Id::unique(("site_rfss", number, i)), rfss, 254);
-            opt_byte(ui, egui::Id::unique(("site_id", number, i)), site, 254);
+            opt_byte(ui, egui::Id::unique(("site_rfss", number, i)), rfss, 254).accessible_name(format!("RFSS, site {group}"));
+            opt_byte(ui, egui::Id::unique(("site_id", number, i)), site, 254).accessible_name(format!("Site ID, site {group}"));
             if ui.small_button("Remove").clicked() {
                 remove = Some(i);
             }
@@ -345,10 +345,10 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
             let SysEntry { group, body: EntryBody::P25Control { iden, chan_no, rx_hz, tx_hz }, .. } = e else { continue };
             let l = ui.label(format!("{}", k + 1));
             num_field(ui, egui::Id::unique(("ctl_site", number, i)), group, 254, 50.0).labelled_by(l.id);
-            mhz_field(ui, egui::Id::unique(("ctl_rx", number, i)), rx_hz, false);
-            mhz_field(ui, egui::Id::unique(("ctl_tx", number, i)), tx_hz, true);
-            num_field(ui, egui::Id::unique(("ctl_iden", number, i)), iden, 15, 50.0);
-            num_field(ui, egui::Id::unique(("ctl_chan", number, i)), chan_no, 4095, 60.0);
+            mhz_field(ui, egui::Id::unique(("ctl_rx", number, i)), rx_hz, false).accessible_name(format!("RX MHz, control channel {}", k + 1));
+            mhz_field(ui, egui::Id::unique(("ctl_tx", number, i)), tx_hz, true).accessible_name(format!("TX MHz, control channel {}", k + 1));
+            num_field(ui, egui::Id::unique(("ctl_iden", number, i)), iden, 15, 50.0).accessible_name(format!("Identifier, control channel {}", k + 1));
+            num_field(ui, egui::Id::unique(("ctl_chan", number, i)), chan_no, 4095, 60.0).accessible_name(format!("Channel, control channel {}", k + 1));
             ui.horizontal(|ui| {
                 if ui.small_button("Up").clicked() && k > 0 {
                     swap = Some((i, ctl[k - 1]));
@@ -379,19 +379,19 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
             let SysEntry { group, body: EntryBody::P25Plan { base_hz, spacing_hz, tx_offset_hz, bw_hz, tdma, slots }, .. } = e else { continue };
             let l = ui.label(format!("{group}"));
             num_field(ui, egui::Id::unique(("plan_id", number, i)), group, 15, 50.0).labelled_by(l.id);
-            mhz_field(ui, egui::Id::unique(("plan_base", number, i)), base_hz, false);
-            num_field(ui, egui::Id::unique(("plan_sp", number, i)), spacing_hz, 1_000_000, 80.0);
+            mhz_field(ui, egui::Id::unique(("plan_base", number, i)), base_hz, false).accessible_name(format!("Base MHz, identifier {group}"));
+            num_field(ui, egui::Id::unique(("plan_sp", number, i)), spacing_hz, 1_000_000, 80.0).accessible_name(format!("Spacing Hz, identifier {group}"));
             let id = egui::Id::unique(("plan_off", number, i));
             let (r, v) = checked_text(ui, id, tx_offset_hz.to_string(), 100.0, |t| t.trim().parse::<i32>().ok());
-            let _ = r;
+            let _ = r.accessible_name(format!("TX offset Hz, identifier {group}"));
             if let Some(v) = v {
                 *tx_offset_hz = v;
             }
-            num_field(ui, egui::Id::unique(("plan_bw", number, i)), bw_hz, 1_000_000, 80.0);
-            ui.checkbox(tdma, "");
+            num_field(ui, egui::Id::unique(("plan_bw", number, i)), bw_hz, 1_000_000, 80.0).accessible_name(format!("Bandwidth Hz, identifier {group}"));
+            ui.checkbox(tdma, "").accessible_name(format!("TDMA, identifier {group}"));
             ui.add_enabled_ui(*tdma, |ui| {
                 let mut v = *slots;
-                num_field(ui, egui::Id::unique(("plan_slots", number, i)), &mut v, 8, 40.0);
+                num_field(ui, egui::Id::unique(("plan_slots", number, i)), &mut v, 8, 40.0).accessible_name(format!("Slots, identifier {group}"));
                 if (1..=8).contains(&v) {
                     *slots = v;
                 }
@@ -566,11 +566,11 @@ fn t3_channels(ui: &mut Ui, s: &mut System, number: u16) {
             let SysEntry { control, body: EntryBody::T3Channel { lcn, rx_hz, tx_hz, cc }, .. } = e else { continue };
             let l = ui.label(format!("{}", k + 1));
             ui.checkbox(control, "").labelled_by(l.id);
-            num_field(ui, egui::Id::unique(("t3c_lcn", number, i)), lcn, u64::from(sys::T3_LCN), 60.0);
-            mhz_field(ui, egui::Id::unique(("t3c_rx", number, i)), rx_hz, false);
-            mhz_field(ui, egui::Id::unique(("t3c_tx", number, i)), tx_hz, true);
+            num_field(ui, egui::Id::unique(("t3c_lcn", number, i)), lcn, u64::from(sys::T3_LCN), 60.0).accessible_name(format!("LCN, channel {}", k + 1));
+            mhz_field(ui, egui::Id::unique(("t3c_rx", number, i)), rx_hz, false).accessible_name(format!("RX MHz, channel {}", k + 1));
+            mhz_field(ui, egui::Id::unique(("t3c_tx", number, i)), tx_hz, true).accessible_name(format!("TX MHz, channel {}", k + 1));
             let shown = cc.map_or("System's".to_string(), |c| c.to_string());
-            egui::ComboBox::from_id_salt(("t3c_cc", number, i))
+            let cc_combo = egui::ComboBox::from_id_salt(("t3c_cc", number, i))
                 .selected_text(shown)
                 .width(90.0)
                 .show_ui(ui, |ui| {
@@ -579,6 +579,7 @@ fn t3_channels(ui: &mut Ui, s: &mut System, number: u16) {
                         ui.selectable_value(cc, Some(n), n.to_string());
                     }
                 });
+            cc_combo.response.accessible_name(format!("Color code, channel {}", k + 1));
             ui.horizontal(|ui| {
                 if ui.small_button("Up").clicked() && k > 0 {
                     swap = Some((i, idx[k - 1]));

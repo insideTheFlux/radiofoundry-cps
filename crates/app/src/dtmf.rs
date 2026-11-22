@@ -60,7 +60,9 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u8>) {
                     ui.label(n.to_string());
                 });
                 row.col(|ui| {
-                    hit |= name_edit(ui, &mut d.name, 16, 176.0).gained_focus();
+                    hit |= name_edit(ui, &mut d.name, 16, 176.0)
+                        .accessible_name(format!("Name, DTMF contact {n}"))
+                        .gained_focus();
                 });
                 row.col(|ui| {
                     let id = ui.scope_id().with(("dtmf_code", n));
@@ -68,6 +70,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u8>) {
                         let t = s.trim().to_uppercase();
                         valid_dtmf(&t).then_some(t)
                     });
+                    let r = r.accessible_name(format!("Code, DTMF contact {n}"));
                     hit |= r.gained_focus();
                     if let Some(v) = v {
                         d.code = v;

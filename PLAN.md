@@ -23,6 +23,10 @@ channels, P25 trunked and Tier III systems (listen only), DTMF and APRS, and the
 Following a live P25 system was tried and found no signal (inconclusive). Not tried: the ARS server, the IP gateway, and a
 real Tier III key (these transmit or need a live network).
 
+Accessibility: the program publishes its controls to screen readers (AccessKit: AT-SPI on Linux, UI Automation on Windows),
+every table cell has a name ("RX MHz, channel 5"), and the tests check it. Verified through AT-SPI on Linux only; not yet
+heard in Orca or Narrator, and the window frame has no name.
+
 Not edited, as in the web editor: targets, target lists and traffic keys (kept byte for byte), DTMF signaling.
 Not planned: flashing firmware (it can brick a radio), Android and iOS, macOS.
 
