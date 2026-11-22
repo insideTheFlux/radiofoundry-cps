@@ -33,6 +33,9 @@ Without a window: `rfcps --ports` lists serial ports, `rfcps --read PORT out.bin
 
 On Linux, to use a serial port add your user to the `dialout` group (`sudo usermod -aG dialout $USER`) and log in again.
 
+On a Wayland desktop (the Ubuntu default) the window runs on X11 through XWayland, so the desktop draws its normal title
+bar and buttons (a native Wayland window gets a plain frame there). `RFCPS_WAYLAND=1 rfcps` keeps native Wayland.
+
 ## Packages
 
 | Platform | How |

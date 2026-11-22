@@ -983,19 +983,27 @@ impl eframe::App for App {
     }
 }
 
+/// Whether to run on X11 although a Wayland session is there: an X server (`DISPLAY`, XWayland on a Wayland desktop) is
+/// reachable, the person did not ask for Wayland (`RFCPS_WAYLAND`), and there is a Wayland session to step around.
+#[cfg(any(target_os = "linux", test))]
+fn prefer_x11(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let set = |k: &str| env(k).is_some_and(|v| !v.is_empty());
+    set("DISPLAY") && !set("RFCPS_WAYLAND") && (set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET"))
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(code) = cli::run(&args) {
         std::process::exit(code);
     }
     // On Linux, use the X11 window system (through XWayland on a Wayland desktop): the desktop then draws the normal
-    // title bar and buttons, where a Wayland window gets a plain fallback. RFCPS_WAYLAND=1 keeps Wayland.
+    // title bar and buttons, where a Wayland window gets a plain fallback frame. winit no longer reads
+    // WINIT_UNIX_BACKEND (removed in 0.29): it takes Wayland when WAYLAND_DISPLAY is set, so hide that from this
+    // process. RFCPS_WAYLAND=1 keeps Wayland.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WINIT_UNIX_BACKEND").is_none()
-        && std::env::var_os("RFCPS_WAYLAND").is_none()
-        && std::env::var_os("DISPLAY").is_some()
-    {
-        std::env::set_var("WINIT_UNIX_BACKEND", "x11");
+    if prefer_x11(|k| std::env::var_os(k)) {
+        std::env::remove_var("WAYLAND_DISPLAY");
+        std::env::remove_var("WAYLAND_SOCKET");
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -1042,5 +1050,30 @@ fn problem_table(t: Table) -> &'static str {
         Table::Systems => "System",
         Table::Dtmf => "DTMF contact",
         Table::Aprs => "APRS configuration",
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::prefer_x11;
+    use std::ffi::OsString;
+
+    fn with(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
+        move |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| OsString::from(v))
+    }
+
+    #[test]
+    fn a_wayland_desktop_with_xwayland_runs_on_x11() {
+        assert!(prefer_x11(with(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(prefer_x11(with(&[("DISPLAY", ":1"), ("WAYLAND_SOCKET", "3")])));
+    }
+
+    #[test]
+    fn nothing_changes_without_xwayland_without_wayland_or_when_wayland_is_asked_for() {
+        assert!(!prefer_x11(with(&[("WAYLAND_DISPLAY", "wayland-0")])), "no X server to fall back on");
+        assert!(!prefer_x11(with(&[("DISPLAY", ":0")])), "an X11 session already");
+        assert!(!prefer_x11(with(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0"), ("RFCPS_WAYLAND", "1")])));
+        assert!(!prefer_x11(with(&[("DISPLAY", ""), ("WAYLAND_DISPLAY", "wayland-0")])), "an empty DISPLAY is none");
+        assert!(!prefer_x11(with(&[])));
     }
 }
