@@ -171,6 +171,15 @@ impl<P: Read + Write> Radio<P> {
         }
     }
 
+    /// One section of the radio's live view (GET_VIEW, debuglink.md 3.7): its `key=value` text. Read only.
+    pub fn view(&mut self, section: u8) -> Result<String> {
+        let d = self.request(0x09, &[section])?;
+        if d.len() < 5 {
+            return Err(LinkError::Protocol("GET_VIEW reply too short".into()));
+        }
+        Ok(String::from_utf8_lossy(&d[5..]).into_owned())
+    }
+
     /// The build's feature names from VERSION (`features=`, debuglink.md 3.1), e.g. `IDDB_COMPACT`.
     pub fn features(&mut self) -> Result<Vec<String>> {
         let text = self.request(0x02, &[])?;
