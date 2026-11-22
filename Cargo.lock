@@ -2565,6 +2565,7 @@ dependencies = [
  "rfcps-core",
  "rfcps-link",
  "rfd",
+ "serde_json",
  "ureq",
  "winresource",
  "zip",

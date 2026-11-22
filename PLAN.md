@@ -12,7 +12,7 @@ no browser, no Python. First radio: DM-32UV.
 Flashing firmware (it can brick a radio), Android and iOS, macOS.
 
 ## DMR ID database (added after the first version)
-Formats N and C, built from a RadioID `user.csv` (opened or downloaded), matching the web editor; written in its own step after the codeplug; a compact database goes to a radio that reads only N as N. Written to a real DM-32UV in both formats (up to 40,000 records, into area 2), checked against the radio's own lookup and put back exactly (2026-11-21). The RadioID API fetch of single regions is not ported.
+Formats N and C, built from a RadioID `user.csv` (opened or downloaded), matching the web editor; written in its own step after the codeplug; a compact database goes to a radio that reads only N as N. Written to a real DM-32UV in both formats (up to 40,000 records, into area 2), checked against the radio's own lookup and put back exactly (2026-11-21). The RadioID API fetch of single regions is ported too (direct requests, optional API key kept only in memory).
 
 ## Layout
 | Crate | Holds | Tests |

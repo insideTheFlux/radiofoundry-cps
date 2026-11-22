@@ -8,6 +8,7 @@ mod cli;
 mod contacts;
 mod doc;
 mod download;
+mod radioid_api;
 mod exchange;
 mod general;
 mod iddbtab;
@@ -1008,6 +1009,7 @@ fn main() -> eframe::Result<()> {
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
             let mut app = App::new();
+            app.iddb.keep_choices_in(worker::data_dir().join("id-database-settings.json"));
             // `rfcps file.bin` opens that image at start.
             if let Some(path) = std::env::args_os().nth(1) {
                 match std::fs::read(&path) {

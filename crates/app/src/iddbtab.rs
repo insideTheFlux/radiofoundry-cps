@@ -6,6 +6,7 @@
 
 use crate::doc::Doc;
 use crate::download::{self, Download};
+use crate::radioid_api::{self, Fetch};
 use crate::worker::RadioFacts;
 use crate::theme;
 use eframe::egui::{self, Ui};
@@ -17,6 +18,75 @@ use std::collections::{BTreeSet, HashMap};
 /// The inputs as one string, how many users they select, the first few as (ID, database text, contact name), and the
 /// room the database takes.
 type Cached = (String, usize, Vec<(u32, String, String)>, radioid::Size);
+
+/// The choices the tab remembers between runs (the web editor's `rfoundry-editor-radioid`). The API key is not one of
+/// them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Prefs {
+    api: bool,
+    regions: Vec<(String, Option<String>)>,
+    prefixes: String,
+    id_min: String,
+    id_max: String,
+    template: String,
+    contact_template: String,
+    upper: bool,
+    text_len: usize,
+}
+
+const DEFAULT_TEMPLATE: &str = "{call} {first} {city} {st}";
+const DEFAULT_CONTACT_TEMPLATE: &str = "{call} {first}";
+
+impl Prefs {
+    fn to_json(&self) -> String {
+        let regions: Vec<serde_json::Value> = self
+            .regions
+            .iter()
+            .map(|(c, s)| match s {
+                Some(s) => serde_json::json!({"country": c, "state": s}),
+                None => serde_json::json!({"country": c}),
+            })
+            .collect();
+        serde_json::to_string_pretty(&serde_json::json!({
+            "mode": if self.api { "api" } else { "file" },
+            "regions": regions,
+            "prefixes": self.prefixes,
+            "idMin": self.id_min,
+            "idMax": self.id_max,
+            "template": self.template,
+            "contactTemplate": self.contact_template,
+            "upper": self.upper,
+            "textLen": self.text_len,
+        }))
+        .unwrap_or_default()
+    }
+
+    /// What a file holds; anything missing or of the wrong kind is the default.
+    fn from_json(text: &str) -> Self {
+        let v: serde_json::Value = serde_json::from_str(text).unwrap_or(serde_json::Value::Null);
+        let s = |k: &str, d: &str| v[k].as_str().map_or_else(|| d.to_string(), String::from);
+        let regions = v["regions"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|r| Some((r["country"].as_str()?.to_string(), r["state"].as_str().map(String::from))))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let text_len = v["textLen"].as_u64().map(|n| n as usize).filter(|n| iddb::TEXT_LENGTHS.contains(n)).unwrap_or(32);
+        Prefs {
+            api: v["mode"].as_str() == Some("api"),
+            regions,
+            prefixes: s("prefixes", ""),
+            id_min: s("idMin", ""),
+            id_max: s("idMax", ""),
+            template: s("template", DEFAULT_TEMPLATE),
+            contact_template: s("contactTemplate", DEFAULT_CONTACT_TEMPLATE),
+            upper: v["upper"].as_bool().unwrap_or(false),
+            text_len,
+        }
+    }
+}
 
 pub struct IdDbUi {
     users: Option<Vec<User>>,
@@ -41,6 +111,21 @@ pub struct IdDbUi {
     /// A download of the user file in progress, and where it comes from.
     download: Option<Download>,
     pub url: String,
+    /// Where the users come from: the user file, or RadioID's API for the chosen regions.
+    mode: Mode,
+    /// The person's RadioID API key (optional), kept only while the program runs.
+    key: String,
+    /// A fetch from the API in progress, and where it asks.
+    fetch: Option<Fetch>,
+    pub api_url: String,
+    /// Where the choices are kept, and what the file holds now (no file in tests).
+    prefs_file: Option<(std::path::PathBuf, Prefs)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    File,
+    Api,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -60,8 +145,8 @@ impl Default for IdDbUi {
             prefixes: String::new(),
             id_min: String::new(),
             id_max: String::new(),
-            template: "{call} {first} {city} {st}".into(),
-            contact_template: "{call} {first}".into(),
+            template: DEFAULT_TEMPLATE.into(),
+            contact_template: DEFAULT_CONTACT_TEMPLATE.into(),
             upper: false,
             text_len: 32,
             message: None,
@@ -70,6 +155,11 @@ impl Default for IdDbUi {
             cache: None,
             download: None,
             url: radioid::DOWNLOAD.to_string(),
+            mode: Mode::File,
+            key: String::new(),
+            fetch: None,
+            api_url: radioid_api::API.to_string(),
+            prefs_file: None,
         }
     }
 }
@@ -96,7 +186,8 @@ fn number(s: &str, default: u32) -> u32 {
 impl IdDbUi {
     fn selection(&self) -> Selection {
         Selection {
-            regions: self.regions.clone(),
+            // fetched users are the regions already
+            regions: if self.mode == Mode::File { self.regions.clone() } else { Vec::new() },
             prefixes: self.prefixes.split(|c: char| c == ',' || c.is_whitespace()).map(String::from).collect(),
             id_min: number(&self.id_min, 0),
             id_max: number(&self.id_max, 0xFF_FFFF),
@@ -141,17 +232,96 @@ impl IdDbUi {
         }
     }
 
+    fn prefs(&self) -> Prefs {
+        Prefs {
+            api: self.mode == Mode::Api,
+            regions: self.regions.clone(),
+            prefixes: self.prefixes.clone(),
+            id_min: self.id_min.clone(),
+            id_max: self.id_max.clone(),
+            template: self.template.clone(),
+            contact_template: self.contact_template.clone(),
+            upper: self.upper,
+            text_len: self.text_len,
+        }
+    }
+
+    /// Takes the choices kept in `path` (if it is there), and keeps them there from now on.
+    pub fn keep_choices_in(&mut self, path: std::path::PathBuf) {
+        let p = std::fs::read_to_string(&path).map(|t| Prefs::from_json(&t)).unwrap_or_else(|_| self.prefs());
+        self.mode = if p.api { Mode::Api } else { Mode::File };
+        self.regions = p.regions.clone();
+        self.prefixes = p.prefixes.clone();
+        self.id_min = p.id_min.clone();
+        self.id_max = p.id_max.clone();
+        self.template = p.template.clone();
+        self.contact_template = p.contact_template.clone();
+        self.upper = p.upper;
+        self.text_len = p.text_len;
+        self.prefs_file = Some((path, p));
+    }
+
+    /// Writes the choices when they changed (a failure to write is not worth a message: they last for this run).
+    fn save_choices(&mut self) {
+        let now = self.prefs();
+        let Some((path, saved)) = &mut self.prefs_file else { return };
+        if *saved == now {
+            return;
+        }
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, now.to_json()).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+            *saved = now;
+        }
+    }
+
+    /// For a test: the fetch mode against `url`, with `regions` chosen.
+    #[cfg(test)]
+    pub fn use_api(&mut self, url: String, regions: Vec<(String, Option<String>)>) {
+        self.mode = Mode::Api;
+        self.api_url = url;
+        self.regions = regions;
+    }
+
+    /// Takes what the fetch has sent; when it is done, the users.
+    fn poll_fetch(&mut self) {
+        let Some(f) = &mut self.fetch else { return };
+        let mut done = None;
+        while let Ok(m) = f.rx.try_recv() {
+            match m {
+                radioid_api::Msg::Counting(i, n) => f.status = format!("Counting users… {} of {n}", i + 1),
+                radioid_api::Msg::Progress(d, t) => f.status = format!("Request {d} of {t}"),
+                radioid_api::Msg::Done(r) => done = Some(r),
+            }
+        }
+        if let Some(r) = done {
+            self.fetch = None;
+            match r {
+                Ok(users) if users.is_empty() => self.message = Some(("RadioID.net has no users for those regions.".into(), true)),
+                Ok(users) => self.set_users(users, "RadioID.net".into()),
+                Err(e) if e == "stopped" => self.message = Some(("The fetch was stopped.".into(), false)),
+                Err(e) => self.message = Some((format!("{e} Try again later, or use the user file."), true)),
+            }
+        }
+    }
+
+    fn set_users(&mut self, users: Vec<User>, source: String) {
+        self.counts = radioid::regions_of(&users).into_iter().map(|r| (r.country.to_lowercase(), r.count)).collect();
+        self.users = Some(users);
+        self.cache = None;
+        self.source = source;
+        self.message = None;
+    }
+
     /// The users of a `user.csv`'s text, from the file called `name`.
     pub fn load_users(&mut self, text: &str, name: String) {
         let users = radioid::parse_users(text);
         if users.is_empty() {
             self.message = Some((format!("{name} holds no DMR users. Use the user.csv file from RadioID.net."), true));
         } else {
-            self.counts = radioid::regions_of(&users).into_iter().map(|r| (r.country.to_lowercase(), r.count)).collect();
-            self.users = Some(users);
-            self.cache = None;
-            self.source = name;
-            self.message = None;
+            self.set_users(users, name);
         }
     }
 
@@ -191,6 +361,7 @@ impl IdDbUi {
 pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
     let pal = theme::palette(ui);
     st.poll_download();
+    st.poll_fetch();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_max_width(760.0);
         // The current database
@@ -228,6 +399,14 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
         ui.add_space(6.0);
         ui.strong("1  Users");
         ui.horizontal(|ui| {
+            let busy = st.download.is_some() || st.fetch.is_some();
+            ui.add_enabled_ui(!busy, |ui| {
+                ui.selectable_value(&mut st.mode, Mode::File, "RadioID User File").on_hover_text("Download user.csv from RadioID.net and open it here. Any region, any size.");
+                ui.selectable_value(&mut st.mode, Mode::Api, "Fetch from RadioID.net").on_hover_text("Fetch the users of a few states or a small country directly.");
+            });
+        });
+        if st.mode == Mode::File {
+        ui.horizontal(|ui| {
             if ui.add_enabled(st.download.is_none(), egui::Button::new("Open user.csv")).clicked() {
                 st.open_file();
             }
@@ -248,15 +427,26 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
                     None => format!("Downloading… {}", mb(d.received)),
                 });
             }
-            if let Some(u) = &st.users {
-                ui.label(egui::RichText::new(format!("{} users from {}.", u.len(), st.source)).color(pal.muted));
-            }
         });
         ui.label(egui::RichText::new("Download connects to radioid.net once and sends nothing but the request. Or download user.csv yourself and open it.").color(pal.muted));
+        } else {
+            ui.label(format!(
+                "RadioID.net returns 200 users per request, so fetching suits up to about {} users. For more, use the user file.",
+                radioid_api::MAX_PAGES * radioid_api::PER_PAGE
+            ));
+            ui.horizontal(|ui| {
+                let lbl = ui.label("RadioID API key (optional)");
+                ui.add(egui::TextEdit::singleline(&mut st.key).password(true).hint_text("Your API key").desired_width(260.0)).labelled_by(lbl.id);
+            });
+            ui.label(egui::RichText::new("Create a key in your RadioID.net account. It is kept only until you close the program and sent only to RadioID.net.").color(pal.muted));
+        }
+        if let Some(u) = &st.users {
+            ui.label(egui::RichText::new(format!("{} users from {}.", u.len(), st.source)).color(pal.muted));
+        }
 
         ui.add_space(6.0);
         ui.strong("2  Regions");
-        let have_users = st.users.is_some();
+        let have_users = st.users.is_some() && st.mode == Mode::File;
         ui.horizontal(|ui| {
             let lbl = ui.label("Country");
             let shown = if st.country.is_empty() { "Choose a country".to_string() } else { st.country.clone() };
@@ -311,7 +501,8 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
             }
         }
         if st.regions.is_empty() {
-            ui.label(egui::RichText::new("No regions chosen: every user in the file is included.").color(pal.muted));
+            let t = if st.mode == Mode::File { "No regions chosen: every user in the file is included." } else { "Add at least one region to fetch." };
+            ui.label(egui::RichText::new(t).color(pal.muted));
         } else {
             let mut remove = None;
             ui.horizontal_wrapped(|ui| {
@@ -325,6 +516,26 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
             if let Some(i) = remove {
                 st.regions.remove(i);
             }
+        }
+
+        if st.mode == Mode::Api {
+            ui.horizontal(|ui| {
+                if st.fetch.is_none() {
+                    if ui.add_enabled(!st.regions.is_empty(), theme::primary(ui, "Fetch Users", 14.0)).clicked() {
+                        st.message = None;
+                        st.fetch = Some(radioid_api::start(st.api_url.clone(), st.key.trim().to_string(), st.regions.clone(), ui.ctx().clone()));
+                    }
+                } else {
+                    if ui.button("Stop").clicked() {
+                        if let Some(f) = &st.fetch {
+                            f.stop();
+                        }
+                    }
+                    if let Some(f) = &st.fetch {
+                        ui.label(f.status.clone());
+                    }
+                }
+            });
         }
 
         ui.add_space(6.0);
@@ -428,7 +639,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
         }
         ui.add_space(6.0);
         if st.users.is_none() {
-            ui.label("Open a RadioID user file to begin.");
+            ui.label(if st.mode == Mode::File { "Open a RadioID user file to begin." } else { "Add regions and fetch their users to begin." });
         } else {
             let mut t = format!("{count} of {total} users selected.");
             if count > 0 {
@@ -455,6 +666,8 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
             ui.colored_label(if *bad { pal.warn } else { pal.ok }, m);
         }
     });
+
+    st.save_choices();
 
     if let Some(c) = st.confirm {
         let mut go = false;
@@ -489,5 +702,54 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn choices_survive_a_round_trip_and_a_bad_file_gives_the_defaults() {
+        let p = Prefs {
+            api: true,
+            regions: vec![("United States".into(), Some("Ohio".into())), ("Canada".into(), None)],
+            prefixes: "N4, K4".into(),
+            id_min: "100".into(),
+            id_max: "".into(),
+            template: "{call} {name}".into(),
+            contact_template: "{call}".into(),
+            upper: true,
+            text_len: 24,
+        };
+        assert_eq!(Prefs::from_json(&p.to_json()), p);
+        let d = Prefs::from_json("this is not json");
+        assert_eq!((d.api, d.regions.len(), d.text_len, d.template.as_str()), (false, 0, 32, DEFAULT_TEMPLATE));
+        // wrong kinds and an odd text length fall back one field at a time
+        let d = Prefs::from_json(r#"{"mode":"api","textLen":20,"upper":"yes","regions":[{"country":3},{"country":"Peru"}],"prefixes":5}"#);
+        assert_eq!((d.api, d.text_len, d.upper, d.prefixes.as_str()), (true, 32, false, ""));
+        assert_eq!(d.regions, vec![("Peru".to_string(), None)]);
+    }
+
+    #[test]
+    fn the_file_is_written_on_a_change_and_read_back_and_holds_no_key() {
+        let dir = std::env::temp_dir().join(format!("rfcps-prefs-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = IdDbUi::default();
+        a.keep_choices_in(path.clone());
+        assert!(!path.exists(), "nothing is written until something changes");
+        a.save_choices();
+        assert!(!path.exists());
+        a.prefixes = "W1".into();
+        a.upper = true;
+        a.key = "secret-key".into();
+        a.save_choices();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("W1") && !text.contains("secret-key"));
+        let mut b = IdDbUi::default();
+        b.keep_choices_in(path.clone());
+        assert_eq!((b.prefixes.as_str(), b.upper, b.key.as_str()), ("W1", true, ""));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

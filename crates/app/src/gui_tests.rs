@@ -255,6 +255,59 @@ fn the_user_file_downloads_on_a_click_and_a_failure_is_said() {
     h.get_by_label_contains("could not reach");
 }
 
+#[test]
+fn users_are_fetched_from_the_api_for_chosen_regions() {
+    let (url, seen) = radioid_api::tests::serve(|p, _| {
+        let page: u32 = p.split("page=").nth(1).and_then(|x| x.parse().ok()).unwrap_or(1);
+        let row = |id: u32, c: &str| format!(r#"{{"id":{id},"callsign":"{c}","fname":"Ann","surname":"S","city":"X","state":"Ohio","country":"United States"}}"#);
+        let body = if page == 1 { format!(r#"{{"count":3,"pages":2,"results":[{},{}]}}"#, row(10, "K1AA"), row(11, "K2BB")) } else { format!(r#"{{"count":3,"pages":2,"results":[{}]}}"#, row(12, "W3CC")) };
+        (200, body)
+    });
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.use_api(url, vec![("United States".into(), Some("Ohio".into()))]);
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    h.get_by_label("Add regions and fetch their users to begin.");
+    h.get_by_label_contains("RadioID API key");
+    click(&mut h, "Fetch Users");
+    for _ in 0..400 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run();
+        if h.query_by_label_contains("3 users from RadioID.net").is_some() {
+            break;
+        }
+    }
+    h.get_by_label_contains("3 users from RadioID.net.");
+    h.get_by_label_contains("3 of 3 users selected.");
+    assert_eq!(seen.lock().unwrap().len(), 2, "page 1 counted once, then page 2");
+    click(&mut h, "Add as Contacts");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.contacts.len(), 3);
+}
+
+#[test]
+fn a_choice_on_the_tab_is_kept_for_the_next_run() {
+    let path = std::env::temp_dir().join(format!("rfcps-gui-prefs-{}", std::process::id())).join("settings.json");
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.keep_choices_in(path.clone());
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    assert!(!path.exists());
+    click(&mut h, "Fetch from RadioID.net");
+    h.run();
+    let text = std::fs::read_to_string(&path).expect("written after the change");
+    assert!(text.contains("\"mode\": \"api\""), "{text}");
+    // a new run starts in that mode
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.keep_choices_in(path.clone());
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    h.get_by_label("Add regions and fetch their users to begin.");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
 fn disabled_by_prefix(h: &H, prefix: &str) -> bool {
     h.get_by_label_contains(prefix).accesskit_node().is_disabled()
 }

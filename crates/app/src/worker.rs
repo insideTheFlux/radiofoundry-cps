@@ -64,14 +64,17 @@ pub struct WriteDone {
     pub backup: std::path::PathBuf,
 }
 
-/// Where a radio's codeplug is saved before every write: `RadioFoundry-CPS/backups` in the home folder.
-pub fn backup_dir() -> std::path::PathBuf {
+/// The program's own folder in the home folder: `RadioFoundry-CPS`.
+pub fn data_dir() -> std::path::PathBuf {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from);
-    home.unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("RadioFoundry-CPS")
-        .join("backups")
+    home.unwrap_or_else(|| std::path::PathBuf::from(".")).join("RadioFoundry-CPS")
+}
+
+/// Where a radio's codeplug is saved before every write: `RadioFoundry-CPS/backups` in the home folder.
+pub fn backup_dir() -> std::path::PathBuf {
+    data_dir().join("backups")
 }
 
 /// UTC date and time as `YYYYMMDD-HHMMSS`, for file names.

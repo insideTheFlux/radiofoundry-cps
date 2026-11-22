@@ -10,7 +10,7 @@ Private project for now. Anything ported from RadioFoundry keeps its MIT notice 
 - Reads a radio's codeplug over its programming cable or USB (the fast codeplug protocol), in under a second.
 - Edits channels, zones, contacts, RX group lists and the general settings (including the settings area: ARS server, IP gateway, tones and signaling tones), P25 and NXDN conventional channels (mode, NAC or RAN, squelch, rate) and the P25 and NXDN unit IDs, P25 trunked systems (identity, sites, control channels, channel plan; listen only until you turn the transmit side on) and DMR Tier III systems (network, options, fixed plan, channels, key) with channels on them, DTMF contacts and APRS configurations, with undo, a Problems list (the web editor's
   checks) and the web editor's look, light or dark.
-- Builds the DMR ID database from a RadioID `user.csv` (downloaded here on a button, or opened from a file; regions, call
+- Builds the DMR ID database from a RadioID `user.csv` (downloaded here on a button, fetched for a few regions through RadioID's API, or opened from a file; the choices are kept in `~/RadioFoundry-CPS/id-database-settings.json`, never the API key; regions, call
   sign prefixes, name templates), or adds those users as contacts; the database is sent in its own step after the
   codeplug. The download is the only network use: one request to radioid.net, and only when you press the button.
 - Writes to the radio safely: a list of what will change, a backup of the radio's codeplug first, only the changed
