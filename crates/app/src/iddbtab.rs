@@ -222,6 +222,19 @@ fn format_of(facts: RadioFacts) -> u8 {
     }
 }
 
+/// 317956 as "317,956".
+fn thousands(n: usize) -> String {
+    let d = n.to_string();
+    let mut out = String::new();
+    for (i, c) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn number(s: &str, default: u32) -> u32 {
     let s = s.trim();
     if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
@@ -273,7 +286,7 @@ impl IdDbUi {
         if let Some(r) = done {
             self.download = None;
             match r {
-                Ok(text) => self.load_users(&text, "user.csv from RadioID.net".into()),
+                Ok(text) => self.load_users(&text, "RadioID.net".into()),
                 Err(e) if e == "stopped" => self.message = Some(("The download was stopped.".into(), false)),
                 Err(e) => self.message = Some((format!("{e}. Try again later, or open a user.csv you downloaded."), true)),
             }
@@ -500,7 +513,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
             ui.label(egui::RichText::new("Create a key in your RadioID.net account. It is kept only until you close the program and sent only to RadioID.net.").color(pal.muted));
         }
         if let Some(u) = &st.users {
-            ui.label(egui::RichText::new(format!("{} users from {}.", u.len(), st.source)).color(pal.muted));
+            ui.label(egui::RichText::new(format!("{} users from {}.", thousands(u.len()), st.source)).color(pal.muted));
         }
 
         ui.add_space(6.0);
@@ -603,9 +616,9 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
             ui.label("Call sign prefixes");
             ui.add(egui::TextEdit::singleline(&mut st.prefixes).hint_text("N4, K4, W4").desired_width(180.0));
             ui.label("DMR ID from");
-            ui.add(egui::TextEdit::singleline(&mut st.id_min).hint_text("1").desired_width(90.0));
+            ui.add(egui::TextEdit::singleline(&mut st.id_min).hint_text("1").desired_width(110.0));
             ui.label("to");
-            ui.add(egui::TextEdit::singleline(&mut st.id_max).hint_text("16777215").desired_width(90.0));
+            ui.add(egui::TextEdit::singleline(&mut st.id_max).hint_text("16777215").desired_width(130.0));
         });
 
         ui.add_space(6.0);
@@ -721,11 +734,11 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
         if st.users.is_none() {
             ui.label(if st.mode == Mode::File { "Open a RadioID user file to begin." } else { "Add regions and fetch their users to begin." });
         } else {
-            let mut t = if updating { format!("Counting… (of {total} users)") } else { format!("{count} of {total} users selected.") };
+            let mut t = if updating { format!("Counting… (of {} users)", thousands(total)) } else { format!("{} of {} users selected.", thousands(count), thousands(total)) };
             if count > 0 && !updating {
                 t += &format!(" ID database size: {} KB.", size.bytes.div_ceil(1024));
                 if size.fit != usize::MAX && count > size.fit {
-                    t += &format!(" This radio holds only {} at this text length; the rest would be left out. Use a shorter text length or fewer regions.", size.fit);
+                    t += &format!(" This radio holds only {} at this text length; the rest would be left out. Use a shorter text length or fewer regions.", thousands(size.fit));
                 }
             }
             ui.label(t);
@@ -836,5 +849,10 @@ mod tests {
         b.keep_choices_in(path.clone());
         assert_eq!((b.prefixes.as_str(), b.upper, b.key.as_str()), ("W1", true, ""));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn counts_get_thousands_separators() {
+        assert_eq!([thousands(0), thousands(999), thousands(1000), thousands(317_956), thousands(16_777_215)], ["0", "999", "1,000", "317,956", "16,777,215"]);
     }
 }

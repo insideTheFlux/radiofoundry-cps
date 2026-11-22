@@ -239,7 +239,7 @@ fn the_user_file_downloads_on_a_click_and_a_failure_is_said() {
             break;
         }
     }
-    h.get_by_label_contains("3 users from user.csv from RadioID.net.");
+    h.get_by_label_contains("3 users from RadioID.net.");
     h.get_by_label_contains("3 of 3 users selected.");
     // a server that is not there
     h.state_mut().iddb.url = "http://127.0.0.1:1/user.csv".into();
@@ -339,22 +339,22 @@ fn a_big_user_list_is_counted_off_the_screen_thread_and_the_buttons_wait() {
     for _ in 0..1000 {
         std::thread::sleep(std::time::Duration::from_millis(10));
         h.run();
-        if h.query_by_label_contains("25000 of 25000 users selected.").is_some() {
+        if h.query_by_label_contains("25,000 of 25,000 users selected.").is_some() {
             break;
         }
     }
-    h.get_by_label_contains("25000 of 25000 users selected.");
+    h.get_by_label_contains("25,000 of 25,000 users selected.");
     assert!(!disabled(&h, "Write ID Database"));
     // a change of the choices starts it again
     h.state_mut().iddb.set_prefixes("K1");
     for _ in 0..1000 {
         std::thread::sleep(std::time::Duration::from_millis(10));
         h.run();
-        if h.query_by_label_contains("2500 of 25000 users selected.").is_some() {
+        if h.query_by_label_contains("2,500 of 25,000 users selected.").is_some() {
             break;
         }
     }
-    h.get_by_label_contains("2500 of 25000 users selected.");
+    h.get_by_label_contains("2,500 of 25,000 users selected.");
 }
 
 fn disabled_by_prefix(h: &H, prefix: &str) -> bool {
