@@ -54,16 +54,37 @@ asks before it carries a secret key (a GUI test; the file dialog itself is not d
 Not covered: native file dialogs, the serial write itself (the software-radio tests in `rfcps-link` and the hand test
 on a radio cover it), and pixel snapshots (`egui_kittest`'s `snapshot` feature, not enabled).
 
-## Against the web editor on a real image (local only)
+## Against the web editor (`tools/webcompare/`)
 
-The decoder and encoder are ported from RadioFoundry's web editor. Three more tests compare them with it on a real
-radio image. They run only when these variables are set, and otherwise pass without checking anything:
+The decoder, encoder and every export are ported from RadioFoundry's web editor. The tests that compare them with it run
+only when their variables are set, and otherwise pass without checking anything. `tools/webcompare/run-all.sh` makes the
+web editor's side of every one of them from a RadioFoundry checkout and runs them (see `tools/webcompare/README.md`). It
+needs no radio and no radio image: the starting image is made up. The table below names each variable; the script that
+makes its input is named there and in the README.
+
+### Random edits (differential test)
+
+`tools/webcompare/differential_gen.mjs` applies random edits to an image through the web editor's own model and writes, per
+case, the image it encodes, a canonical dump of what it decodes, its CSV, qdmr and CHIRP exports and its problems; for pairs
+of cases it also writes the first one's model onto the second one's bytes. `crates/core/tests/differential.rs` makes the CPS
+do the same and compares everything. It runs only when `RFCPS_FUZZ_DIR` is set (`run-all.sh` does: 3 seeds of 100 cases, more
+with `DIFF_SEEDS` and `DIFF_CASES`). It reports every mismatch with the edits that led to it. The CPS-only weather-channel
+warning is left out of the problem comparison. Use several seeds and the prepared base (`differential_prep.mjs`), since a
+plain image has no systems or tags. `crates/link/tests/lz4_spec.rs` checks the streams the editor sends are valid LZ4 blocks
+that obey the format's end rules and the 4128-byte limit; it needs no web editor.
+
+To compare on a real image of your own as well, read one from a radio (`rfcps --read PORT out.bin`) and set `RFCPS_IMAGE`
+to it, with `RFCPS_GOLDEN` and the others made from the same file by the same scripts.
 
 | Variable | What |
 |---|---|
-| `RFCPS_IMAGE` | a codeplug image read from a radio (`tools/cps_fast.py read`, `--regions radio`) |
+| `RFCPS_IMAGE` | the starting image: made up by `make-base.mjs`, or one read from a radio (`rfcps --read PORT out.bin`) |
 | `RFCPS_GOLDEN` | the web editor's decode of it, as JSON (`golden.mjs`, a small Node script over `model.js decode()`) |
 | `RFCPS_EDITED_JS` | the web editor's encode of a fixed set of edits to the same image (`edit_js.mjs`) |
+| `RFCPS_CSV_DIR` | the web editor's CSV export of the six tables of the image (`csv6_js.mjs`) |
+| `RFCPS_CHIRP_CSV` | its CHIRP CSV export of the image (`chirp_js.mjs`) |
+| `RFCPS_QDMR_DIR` | its qdmr YAML export of the image, and of an export imported again (`qdmr_js.mjs`) |
+| `RFCPS_STOCK_DATA`, `RFCPS_STOCK_GOLDEN` | a stock DM-32UV backup of your own and the web editor's import of it (`stock_js.mjs`); not made by `run-all.sh` |
 | `RFCPS_KV_DIR` | the web editor's settings-area sectors for fixed key edits, with the radio-merge case (`edit_kv.mjs`, a small Node script over `kv.js` `putKeys` and `areaForWrite`) |
 | `RFCPS_MODES_DIR` | the web editor's whole images for fixed channel-mode edits (`edit_modes.mjs`: `setKind` to P25 and NXDN with parameters and unit IDs, a rename, a delete, back to plain; `model.js` `encode()`) |
 | `RFCPS_SYS_DIR` | the web editor's whole images for fixed system edits (`edit_systems.mjs`: `newSystem` for a P25 trunked system with a site, a control channel and a plan row, a channel put on it, a rename and a second control channel, and the system deleted; `model.js` `encode()` and `remove()`) |
@@ -73,8 +94,8 @@ radio image. They run only when these variables are set, and otherwise pass with
 | `RFCPS_IDDBC_DIR` | the web editor's DMR ID database in format C and the conversions (`iddbc_gold.mjs`: steps on one image, namely writes in either format fresh or against what is there, converts and an erase, with room limits and page splits; whole image, each step's answer, read-back, extent and size estimate out) |
 | `RFCPS_RID_DIR` | the web editor's RadioID source on random `user.csv` text (`rid_gold.mjs`: `parseUsers` with header variants and bad rows, `select`, `regionsOf`, `format` over many templates, `addContacts`; `sources/radioid.js`) |
 | `RFCPS_RIDAPI_DIR` | the web editor's `fromApi` on random API replies, with ids and texts of every JSON type (`ridapi_gold.mjs`; `sources/radioid.js`) |
-| `RFCPS_IDDB_DIR` | the web editor's DMR ID database in format N for fixed and random record sets (`iddb_gold.mjs`: records, text length and room in, the bytes written, header, count, read-back and extent out; `iddb.js`) |
-| `RFCPS_RID_DIR` | the web editor's RadioID source on random `user.csv` text (`rid_gold.mjs`: `parseUsers` with header variants and bad rows, `select`, `regionsOf`, `format` over many templates; `sources/radioid.js`) |
+
+`tools/webcompare/run-all.sh` sets all of these and runs the tests. By hand, for example:
 
 ```
 RFCPS_IMAGE=... RFCPS_GOLDEN=... RFCPS_EDITED_JS=... cargo test -p rfcps-core --test golden -- --nocapture

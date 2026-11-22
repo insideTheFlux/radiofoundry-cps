@@ -1,0 +1,59 @@
+---
+version: 0.15.1
+settings:
+  defaultID: id1
+  boot:
+    message1: Hi
+    message2: There
+  gnss:
+    fixedPositionEnabled: true
+    fixedPosition: CM87ss
+radioIDs:
+  - dmr: {id: id1, name: N0CALL, number: 3100123}
+contacts:
+  - dmr: {id: cont1, name: Local, type: GroupCall, number: 9}
+  - dtmf: {id: cont2, name: gate, number: 12ab*#}
+  - dtmf: {id: cont3, name: Long Named DTMF Contact Name, number: '5'}
+channels:
+  - fm:
+      id: ch1
+      name: Beacon
+      rxFrequency: 144.39 MHz
+      txFrequency: 144.39 MHz
+      power: High
+      aprs: aprs1
+  - fm:
+      id: ch2
+      name: Other
+      rxFrequency: 145.5 MHz
+      txFrequency: 145.5 MHz
+      aprs: aprs2
+  - dmr:
+      id: ch3
+      name: Digital
+      rxFrequency: 439.5625 MHz
+      txFrequency: 434.5625 MHz
+      colorCode: 1
+      timeSlot: TS2
+      aprs: aprs9
+positioning:
+  - aprs:
+      id: aprs1
+      name: Mobile Station Long
+      source: AB1CDE-7
+      destination: APN000-0
+      path: [WIDE1-1, WIDE2-2, WIDE3-3]
+      icon: Car
+      message: Mobile comment that is longer than twenty three
+      period: 5 min
+      revert: ch1
+      opengd77: {baud: 300, transmitQSY: true}
+  - aprs: {id: aprs2, name: Home, source: N0CALL-3, path: [WIDE1-1], icon: UnknownIconName, message: Hi, revert: ch9}
+  - dmr: {id: pos1, name: DmrPos}
+  - aprs: {id: aprs3, name: Three, source: A-1, icon: Digipeater}
+  - aprs: {id: aprs4, name: Four, source: A-2, icon: Phone}
+  - aprs: {id: aprs5, name: Five, source: A-3, icon: Home}
+  - aprs: {id: aprs6, name: Six, source: A-4, icon: None}
+zones:
+  - {id: zone1, name: All, A: [ch1, ch2, ch3], B: []}
+...
