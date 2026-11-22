@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (c) 2026 The RadioFoundry Authors
 // Copyright (c) 2026 insideTheFlux
 
 //! The ID database tab: names for DMR IDs that are not contacts, built from RadioID's `user.csv` (the web editor's

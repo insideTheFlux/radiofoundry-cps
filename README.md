@@ -3,7 +3,11 @@
 A native codeplug editor for [RadioFoundry](https://github.com/RadioFoundry/RadioFoundry) radios, written in Rust: a
 Windows 11 `.exe` and a Linux program, no browser. First radio: the DM-32UV.
 
-Private project for now. Anything ported from RadioFoundry keeps its MIT notice (see `LICENSE`, `NOTICE.md`).
+An independent editor, not an official RadioFoundry release. MIT licensed. Anything ported from RadioFoundry keeps its
+notice (see `LICENSE`, `AUTHORS`, `CONTRIBUTORS` and `NOTICE.md`).
+
+**Tested on one radio:** the DM-32UV, on Windows 11 and Linux. Other RadioFoundry radios may work, since RadioFoundry's spec says the protocol and the
+image layout are shared, but none has been tried; see [Adding a radio](docs/adding-a-radio.md).
 
 ## What it does
 
@@ -48,4 +52,5 @@ program makes SmartScreen ask "Run anyway?" once.
 | `rfcps-link` | the serial link: the debug link's frames, the fast codeplug read and write, and a software radio for tests |
 | `rfcps` | the window |
 
-See `PLAN.md` for scope and phases and `docs/testing.md` for how the real-radio checks work.
+See `PLAN.md` for scope and status, `docs/testing.md` for how the tests work (and `tools/webcompare/` to check the parity
+with the web editor yourself), and `docs/adding-a-radio.md` for trying another radio.

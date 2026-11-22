@@ -1,45 +1,46 @@
 # Plan
 
 ## Goal
-A native editor for RadioFoundry radios: Windows 11 (x86-64) `.exe` and Ubuntu/Linux binary. One codebase, all Rust,
-no browser, no Python. First radio: DM-32UV.
 
-## Next, in order
-1. **Write test from Windows. Done (2026-11-20).** On Windows 11, with the build from GitHub Actions, over COM3 (CH340): a channel rename and the revert, one block each, read back and verified; the radio's screen showed the new name; a final read was byte for byte the same as the one before (1,179,648 bytes, 0 differ).
-2. **qdmr YAML, open and save. Done (2026-11-20).** What the web editor does (`site/static/js/codeplug/yaml.js`, spec `docs/spec/qdmr-yaml.md`): open a qdmr codeplug, save one with a dated name, and list what qdmr's format can't hold (SFR settings, power levels qdmr has no name for). Ported only from the web editor's code and the RadioFoundry spec, never from qdmr's source (GPL); checked byte for byte against the web editor on real files, with the golden tests gated by environment variables so no private data is in the repo.
+A native editor for RadioFoundry radios: a Windows 11 (x86-64) `.exe` and a Linux program, all Rust, no browser. It stays
+at parity with RadioFoundry's web Codeplug Editor (`site/static/js/codeplug/` in the RadioFoundry repository) and follows
+the specs in its `docs/spec/`. First radio: the DM-32UV.
 
-## Not in the first version
-Flashing firmware (it can brick a radio), Android and iOS, macOS.
+## Status
 
-## DMR ID database (added after the first version)
-Formats N and C, built from a RadioID `user.csv` (opened or downloaded), matching the web editor; written in its own step after the codeplug; a compact database goes to a radio that reads only N as N. Written to a real DM-32UV in both formats (up to 40,000 records, into area 2), checked against the radio's own lookup and put back exactly (2026-11-21). The RadioID API fetch of single regions is ported too (direct requests, optional API key kept only in memory).
+| Area | State |
+|---|---|
+| Codeplug image: channels, VFOs, zones, contacts, RX group lists, general settings, the settings area | done, matches the web editor |
+| DTMF contacts, APRS configurations | done, matches the web editor |
+| P25 and NXDN conventional channels, P25 trunked systems, DMR Tier III systems | done, matches the web editor |
+| Read and write over the programming cable (the fast codeplug protocol) | done: only changed blocks, a backup first, a refusal if the radio changed, a read-back check |
+| Import and export: stock DM-32UV backup, qdmr YAML, CHIRP CSV, CSV tables | done, matches the web editor |
+| DMR ID database, formats N and C, built from a RadioID `user.csv` (opened, downloaded or fetched by region) | done, matches the web editor; a compact database goes to a radio that reads only N as N |
+| Packaging: Windows `.zip`, Linux `.tar.gz` and `.deb`, built by GitHub Actions on a `v*` tag | done |
+
+Checked on a real DM-32UV: reading and writing, the table edits, the settings area, signaling tones, P25 and NXDN
+channels, P25 trunked and Tier III systems (listen only), DTMF and APRS, and the ID database in both formats.
+Following a live P25 system was tried and found no signal (inconclusive). Not tried: the ARS server, the IP gateway, and a
+real Tier III key (these transmit or need a live network).
+
+Not edited, as in the web editor: targets, target lists and traffic keys (kept byte for byte), DTMF signaling.
+Not planned: flashing firmware (it can brick a radio), Android and iOS, macOS.
 
 ## Layout
+
 | Crate | Holds | Tests |
 |---|---|---|
-| `rfcps-core` | codeplug model, image encode and decode, import and export formats | host unit tests, round trips |
-| `rfcps-link` | serial port, CPS protocol (and the fast block protocol later) | against a software radio |
-| `rfcps` | egui GUI | by hand on the radio |
-
-## Phases
-| # | Phase | Result | Rough effort |
-|---|---|---|---|
-| 0 | Scaffold, toolchain, Windows type-check | window opens on Linux (done: compiles for Linux and Windows) | days |
-| 1 | `rfcps-core`: the codeplug image (channels, contacts, zones, groups, settings) from `docs/spec/` | decode and encode a real radio image, round trip is exact | 3-5 weeks. **Decode and encode done** for channels, VFOs, zones, contacts, RX lists and general settings: they match the web editor on a real DM-32UV image, an unedited image round-trips byte for byte, and edits encode identically to the web editor's. DTMF contacts (63) and APRS configurations (8) are modeled, with their own tabs, an APRS choice on a channel, CSV (`dtmf-contacts.csv`, `aprs.csv`) and qdmr (APRS systems under `positioning`, the fixed position, DTMF contacts) import and export, all matching the web editor; DTMF signaling (the 120 bytes at 0x1400) is not edited, as in the web editor, and is kept. Written to a real DM-32UV (2026-11-21): a DTMF contact and an APRS configuration (record 1), read back exactly, then both removed (a delete marks the record empty and leaves its other bytes, as in the web editor; the firmware reads a first byte of 0xFF as empty). The firmware does not show either record, but it reads APRS record 1 whether or not a channel names it and copies its SSID and path into the radio's own settings, where they stay after the record goes (docs/spec/aprs.md 11): the test changed the radio's APRS SSID to 5 and path to WIDE1-1, put back by hand on the radio's APRS page. No beacon was sent (Automatic beacons was off). Do not write an APRS record to a radio without expecting that. DMR Tier III systems (the block with every option, the fixed plan and the sites; the channel table; the key with its PSN, shown only when asked; the system's own records kept and removed with it) and Tier III channels are modeled, matching the web editor's whole image byte for byte; a new Tier III system and channel are transmit-capable, as in the web editor. Written to a real DM-32UV (2026-11-21): a listen-only system "Test T3" with a dummy key and a control channel at 438.1 MHz, and channel 31 put on it with its transmit flag off; the radio showed T3, RX only and Searching, then the system, key and tag were removed and the channel restored, the radio byte-identical to before. Following a live system and authenticating with a real key are not tested. P25 trunked systems (the system record, its sites, control channels and channel plan, and a channel on a system) are modeled, matching the web editor's whole image byte for byte; written to a real DM-32UV (2026-11-20): a listen-only system "Test Net" with a site, a control channel and a plan row, and channel 31 put on it (receive only); the radio showed the channel as P25T and "Finding system" (its 851 MHz control channel is outside the radio's receive band, so it never found one), then the system was removed and channel 31 restored, the radio byte-identical to before. Following a live system is not tested. Save image leaves secret keys out unless asked. P25 and NXDN conventional channels (the tag, its parameter block and the kinds' radio-wide unit IDs; channel-modes.md) are modeled, matching the web editor's whole image byte for byte. Written to a real DM-32UV (2026-11-20): channel 31 made P25 (NAC 123, selective squelch) and then NXDN (4800 bit/s, RAN 5), both receive only, the radio's channel screen showing each; made plain FM again and the P25 and NXDN unit IDs set and cleared, each step read back and the radio byte-identical to before at the end. The radio has no screen for the squelch or the radio-wide unit IDs, so those were checked by the read-back only. The settings area (ARS server, IP gateway, the four tones, the three signaling tones) is modeled: it matches the web editor's `kv.js` byte for byte, and a write keeps the radio's own keys. Written to a real DM-32UV (2026-11-20): the call end tone key set Off, back to On and removed, one block each time, read back and verified, the radio's Sound menu following; nothing else on the radio changed. The ARS server, IP gateway and signaling tones are covered by the web-editor match and the software-radio tests, not yet tried on a radio (an ARS server would make the radio register on air) |
-| 2 | `rfcps-link`: read and write over the programming cable | reads the radio's codeplug to a file and writes it back, byte for byte | 1-2 weeks. **Read done**: the debug link's frames and the fast codeplug protocol (INFO, SUMS, READ, LZ4, CRC-32), tested against a software radio and a real DM-32UV (identical to the Python tool's read, 0.7 s). **Write built**: BEGIN, BLOCK, DATA, END, COMMIT; only changed blocks; the radio's own bytes outside the regions kept; a refusal to write if the radio changed since it was read; a read-back verify. Tested on a software radio (8 tests) and a dry run on a real DM-32UV (an unedited codeplug plans 0 blocks, a renamed channel 1). **Written to a real DM-32UV (2026-11-20)**: channel 3 renamed and renamed back, one block each time, read back and verified; the radio's screen showed the new name at once, and afterward its codeplug was byte-identical to the backup in every region |
-| 3 | GUI: tables for channels, contacts, zones; edit, undo, validation ("problems" list) | edit a channel and write it | 4-8 weeks. **Done** (a first version): port chooser, read from a radio, the web editor's palette in light and dark, a Channels table with a detail form, Zones, Contacts, RX Group Lists and General tabs, typed frequencies, undo and redo, a Problems list, Write to radio with a change list, an automatic backup and a read-back check. Needs polish from use on real screens |
-| 4 | Import and export: CSV, CHIRP, qdmr YAML, the stock DM-32UV codeplug | open a stock backup | 2-4 weeks. **Done**: the stock DM-32UV import (DCS read as BCD; checked against the web editor on a real backup), CSV tables (export identical to the web editor's on a real image), CHIRP CSV (export identical too). **qdmr YAML done** (open and save; the export is identical to the web editor's, character for character, on a real image; APRS and DTMF are counted in the notes because the model doesn't hold them yet). CHIRP images (`.img`) are not planned: CHIRP does not support the DM-32UV, and CHIRP CSV import and export already carry channels between the two |
-| 5 | Packaging: Windows `.exe` or installer, Linux AppImage and `.deb`, CI | a download that runs | 1-2 weeks. **Linux done**: a release build (8 MB, no libraries beyond libc), a `.tar.gz` and a `.deb`. **Windows**: the build script, the icon embedding and a GitHub Actions workflow are written; the `.exe` itself has to be built on a Windows computer or by the workflow. No AppImage, no signed installer |
-Total for a usable DM-32UV editor: about 2-3 months part-time. Full parity with the web editor takes longer.
+| `rfcps-core` | the codeplug as data: image encode and decode, import and export formats. No I/O | unit tests, golden and differential tests against the web editor |
+| `rfcps-link` | the serial link: frames, the fast codeplug protocol, writing | against a software radio |
+| `rfcps` | the egui window | headless GUI tests |
 
 ## Testing
-- Host tests for every encode and decode, including the real DM-32UV words we know (CTCSS, DCS as BCD).
-- A software radio (a stub speaking the protocol over a pty) so `rfcps-link` is tested without hardware. RadioFoundry's
-  `tests/host/cpsSim` does this for the Python client.
-- Hardware: Linux here, Windows 11 on the owner's laptop. Back up the codeplug before any write.
+
+See `docs/testing.md`. Host tests need no radio. `tools/webcompare/run-all.sh` checks parity with the web editor from a
+RadioFoundry checkout, with no radio image. Back up the radio's codeplug before any write.
 
 ## Risks
-- Windows: the FTDI and CH340 drivers, and COM port naming. Windows 11 usually installs them itself.
-- Windows code signing: an unsigned `.exe` makes SmartScreen warn. A certificate costs money; fine for private use.
-- A write replaces the radio's codeplug. Always read and keep a backup first, and verify after writing.
-- The spec is the source of truth; where it is wrong or silent, check against a real radio (as with the DCS words).
+
+- A write replaces the radio's codeplug: always keep a backup and verify after writing.
+- Windows: the FTDI and CH340 drivers and COM port naming; an unsigned `.exe` makes SmartScreen warn once.
+- The spec is the source of truth. Where it is wrong or silent, check on a real radio.

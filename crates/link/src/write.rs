@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (c) 2026 The RadioFoundry Authors
 // Copyright (c) 2026 insideTheFlux
 
 //! Writing a codeplug image to a radio, safely: only the blocks that differ, the radio's own bytes outside the

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (c) 2026 The RadioFoundry Authors
 // Copyright (c) 2026 insideTheFlux
 
 //! RadioID.net's public API as a source of users, a few regions at a time (the web editor's "Fetch from RadioID.net",

@@ -1,16 +1,18 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 insideTheFlux
-# Builds the Linux packages into dist/: a .tar.gz (binary, desktop entry, icon, license) and a .deb for Debian and Ubuntu.
+# Builds the Linux packages into dist/: a .tar.gz (binary, desktop entry, icon, licenses) and a .deb for Debian and Ubuntu.
 #   packaging/build-linux.sh
 set -eu
 cd "$(dirname "$0")/.."
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 ARCH=x86_64
 cargo build --release -p rfcps
+# The licenses of the libraries the program is built from (Python 3 is needed for this one step)
+python3 packaging/third_party_licenses.py dist/THIRD_PARTY_LICENSES.txt x86_64-unknown-linux-gnu
 rm -rf dist/stage dist/rfcps-"$VERSION"-linux-"$ARCH".tar.gz
 mkdir -p dist/stage/rfcps-"$VERSION"
-cp target/release/rfcps packaging/rfcps.desktop packaging/rfcps.png LICENSE NOTICE.md README.md dist/stage/rfcps-"$VERSION"/
+cp target/release/rfcps packaging/rfcps.desktop packaging/rfcps.png LICENSE AUTHORS CONTRIBUTORS NOTICE.md README.md dist/THIRD_PARTY_LICENSES.txt dist/stage/rfcps-"$VERSION"/
 tar -C dist/stage -czf dist/rfcps-"$VERSION"-linux-"$ARCH".tar.gz rfcps-"$VERSION"
 echo "dist/rfcps-$VERSION-linux-$ARCH.tar.gz"
 
@@ -21,7 +23,7 @@ if command -v dpkg-deb > /dev/null; then
 	install -m 755 target/release/rfcps "$D/usr/bin/rfcps"
 	install -m 644 packaging/rfcps.desktop "$D/usr/share/applications/rfcps.desktop"
 	install -m 644 packaging/rfcps.png "$D/usr/share/icons/hicolor/256x256/apps/rfcps.png"
-	install -m 644 LICENSE NOTICE.md "$D/usr/share/doc/rfcps/"
+	install -m 644 LICENSE AUTHORS CONTRIBUTORS NOTICE.md dist/THIRD_PARTY_LICENSES.txt "$D/usr/share/doc/rfcps/"
 	SIZE=$(du -sk "$D/usr" | cut -f1)
 	cat > "$D/DEBIAN/control" <<CONTROL
 Package: rfcps
