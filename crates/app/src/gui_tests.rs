@@ -308,6 +308,55 @@ fn a_choice_on_the_tab_is_kept_for_the_next_run() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+#[test]
+fn add_from_radioid_on_the_contacts_tab_opens_the_id_database_tab() {
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.load_users(USERS, "user.csv".into());
+    let mut h = tall(app);
+    click_prefix(&mut h, "Contacts");
+    assert!(h.state().tab == Tab::Contacts);
+    click(&mut h, "Add from RadioID");
+    assert!(h.state().tab == Tab::IdDb);
+    h.get_by_label_contains("3 of 3 users selected.");
+}
+
+#[test]
+fn a_big_user_list_is_counted_off_the_screen_thread_and_the_buttons_wait() {
+    // more users than the tab works out at once
+    let mut csv = String::from("RADIO_ID,CALLSIGN,FIRST_NAME,LAST_NAME,CITY,STATE,COUNTRY\n");
+    for i in 0..25_000u32 {
+        csv += &format!("{},K{}ABC,Ann,Smith,Town {},Ohio,United States\n", 3_000_000 + i, i % 10, i % 50);
+    }
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    app.iddb.load_users(&csv, "big.csv".into());
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    // at first the answer is on its way and the buttons are off
+    h.get_by_label_contains("Counting…");
+    assert!(disabled(&h, "Write ID Database"));
+    for _ in 0..1000 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run();
+        if h.query_by_label_contains("25000 of 25000 users selected.").is_some() {
+            break;
+        }
+    }
+    h.get_by_label_contains("25000 of 25000 users selected.");
+    assert!(!disabled(&h, "Write ID Database"));
+    // a change of the choices starts it again
+    h.state_mut().iddb.set_prefixes("K1");
+    for _ in 0..1000 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run();
+        if h.query_by_label_contains("2500 of 25000 users selected.").is_some() {
+            break;
+        }
+    }
+    h.get_by_label_contains("2500 of 25000 users selected.");
+}
+
 fn disabled_by_prefix(h: &H, prefix: &str) -> bool {
     h.get_by_label_contains(prefix).accesskit_node().is_disabled()
 }

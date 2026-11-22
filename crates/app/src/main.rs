@@ -950,7 +950,12 @@ impl eframe::App for App {
             match self.tab {
                 Tab::Channels => channels::show(ui, &mut doc.cp, &mut self.channel),
                 Tab::Zones => zones::show(ui, &mut doc.cp, &mut self.zone),
-                Tab::Contacts => contacts::show(ui, &mut doc.cp, &mut self.contact),
+                Tab::Contacts => {
+                    if contacts::show(ui, &mut doc.cp, &mut self.contact) {
+                        self.tab = Tab::IdDb;
+                        self.iddb.show_actions();
+                    }
+                }
                 Tab::IdDb => iddbtab::show(ui, doc, &mut self.iddb, self.radio_facts),
                 Tab::Lists => lists::show(ui, &mut doc.cp, &mut self.list),
                 Tab::Dtmf => dtmf::show(ui, &mut doc.cp, &mut self.dtmf),

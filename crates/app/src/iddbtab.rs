@@ -14,6 +14,48 @@ use rfcps_core::iddb;
 use rfcps_core::radioid::{self, Selection, User};
 use rfcps_core::regions::COUNTRIES;
 use std::collections::{BTreeSet, HashMap};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// More users than this and the size and preview are worked out on a thread, after the choices have been still for a
+/// moment; fewer and they come at once.
+const SYNC_LIMIT: usize = 20_000;
+const SETTLE: Duration = Duration::from_millis(300);
+
+/// What the size and preview depend on, and the users to work them out from.
+struct Job {
+    users: Arc<Vec<User>>,
+    selection: Selection,
+    template: String,
+    contact_template: String,
+    upper: bool,
+    text_len: usize,
+    format: u8,
+    end: usize,
+}
+
+struct Pending {
+    key: String,
+    since: Instant,
+    job: Option<Job>,
+    rx: Option<Receiver<Cached>>,
+}
+
+fn compute(key: String, j: &Job) -> Cached {
+    let sel = radioid::select(&j.users, &j.selection);
+    let size = if j.format == b'C' {
+        radioid::iddb_size_c(&radioid::iddb_records(&sel, &j.template, j.upper, j.text_len), j.end)
+    } else {
+        radioid::iddb_size(sel.len(), j.text_len, j.end)
+    };
+    let prev = sel
+        .iter()
+        .take(6)
+        .map(|u| (u.id, radioid::format(u, &j.template, j.upper, j.text_len), radioid::format(u, &j.contact_template, j.upper, 16)))
+        .collect();
+    (key, sel.len(), prev, size)
+}
 
 /// The inputs as one string, how many users they select, the first few as (ID, database text, contact name), and the
 /// room the database takes.
@@ -89,7 +131,7 @@ impl Prefs {
 }
 
 pub struct IdDbUi {
-    users: Option<Vec<User>>,
+    users: Option<Arc<Vec<User>>>,
     source: String,
     country: String,
     states: BTreeSet<String>,
@@ -108,6 +150,10 @@ pub struct IdDbUi {
     counts: HashMap<String, usize>,
     /// What the inputs selected: the inputs as one string, how many users, and the first few as the radio shows them.
     cache: Option<Cached>,
+    /// A size and preview being worked out off the screen thread (a big user list makes it take a second).
+    pending: Option<Pending>,
+    /// Set by the Contacts tab's shortcut: the next draw scrolls to the buttons.
+    scroll_to_actions: bool,
     /// A download of the user file in progress, and where it comes from.
     download: Option<Download>,
     pub url: String,
@@ -153,6 +199,8 @@ impl Default for IdDbUi {
             confirm: None,
             counts: HashMap::new(),
             cache: None,
+            pending: None,
+            scroll_to_actions: false,
             download: None,
             url: radioid::DOWNLOAD.to_string(),
             mode: Mode::File,
@@ -277,6 +325,16 @@ impl IdDbUi {
         }
     }
 
+    /// The Contacts tab's "Add from RadioID": the next draw scrolls to the buttons.
+    pub fn show_actions(&mut self) {
+        self.scroll_to_actions = true;
+    }
+
+    #[cfg(test)]
+    pub fn set_prefixes(&mut self, p: &str) {
+        self.prefixes = p.into();
+    }
+
     /// For a test: the fetch mode against `url`, with `regions` chosen.
     #[cfg(test)]
     pub fn use_api(&mut self, url: String, regions: Vec<(String, Option<String>)>) {
@@ -309,8 +367,9 @@ impl IdDbUi {
 
     fn set_users(&mut self, users: Vec<User>, source: String) {
         self.counts = radioid::regions_of(&users).into_iter().map(|r| (r.country.to_lowercase(), r.count)).collect();
-        self.users = Some(users);
+        self.users = Some(Arc::new(users));
         self.cache = None;
+        self.pending = None;
         self.source = source;
         self.message = None;
     }
@@ -586,39 +645,60 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
         ui.label(egui::RichText::new("Used for Add as Contacts. Contact names hold 16 characters.").color(pal.muted));
 
         // Preview, summary and the two actions
-        let total = st.users.as_ref().map_or(0, Vec::len);
+        let total = st.users.as_ref().map_or(0, |u| u.len());
         let end = facts.end.unwrap_or(usize::MAX);
         let key = format!(
             "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{end}",
             st.regions, st.prefixes, st.id_min, st.id_max, st.template, st.contact_template, st.upper, st.text_len, format_of(facts)
         );
         if st.cache.as_ref().map(|c| &c.0) != Some(&key) {
-            let (count, preview, size) = match &st.users {
-                Some(users) => {
-                    let sel = st.selected(users);
-                    let size = if format_of(facts) == b'C' {
-                        radioid::iddb_size_c(&radioid::iddb_records(&sel, &st.template, st.upper, st.text_len), end)
-                    } else {
-                        radioid::iddb_size(sel.len(), st.text_len, end)
-                    };
-                    let prev = sel
-                        .iter()
-                        .take(6)
-                        .map(|u| {
-                            (
-                                u.id,
-                                radioid::format(u, &st.template, st.upper, st.text_len),
-                                radioid::format(u, &st.contact_template, st.upper, 16),
-                            )
-                        })
-                        .collect();
-                    (sel.len(), prev, size)
-                }
-                None => (0, Vec::new(), radioid::iddb_size(0, 16, end)),
+            let job = Job {
+                users: st.users.clone().unwrap_or_default(),
+                selection: st.selection(),
+                template: st.template.clone(),
+                contact_template: st.contact_template.clone(),
+                upper: st.upper,
+                text_len: st.text_len,
+                format: format_of(facts),
+                end,
             };
-            st.cache = Some((key, count, preview, size));
+            if job.users.len() <= SYNC_LIMIT {
+                st.cache = Some(compute(key.clone(), &job));
+                st.pending = None;
+            } else {
+                // a thread, once the choices have been still for a moment
+                if st.pending.as_ref().map(|p| &p.key) != Some(&key) {
+                    st.pending = Some(Pending { key: key.clone(), since: Instant::now(), job: Some(job), rx: None });
+                }
+                if let Some(p) = &mut st.pending {
+                    if p.rx.is_none() {
+                        let wait = SETTLE.saturating_sub(p.since.elapsed());
+                        if wait.is_zero() {
+                            if let Some(job) = p.job.take() {
+                                let (tx, rx) = channel();
+                                let (k, ctx) = (p.key.clone(), ui.ctx().clone());
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(compute(k, &job));
+                                    ctx.request_repaint();
+                                });
+                                p.rx = Some(rx);
+                            }
+                        } else {
+                            ui.ctx().request_repaint_after(wait);
+                        }
+                    }
+                    if let Some(c) = p.rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                        if c.0 == key {
+                            st.cache = Some(c);
+                        }
+                        st.pending = None;
+                    }
+                }
+            }
         }
-        let (count, preview, size) = st.cache.as_ref().map(|c| (c.1, c.2.clone(), c.3)).expect("just filled");
+        // what is shown while a new answer is on its way is the last one, marked
+        let updating = st.cache.as_ref().map(|c| &c.0) != Some(&key);
+        let (count, preview, size) = st.cache.as_ref().map(|c| (c.1, c.2.clone(), c.3)).unwrap_or((0, Vec::new(), radioid::iddb_size(0, 16, end)));
         ui.add_space(6.0);
         ui.strong("Preview");
         if preview.is_empty() {
@@ -641,8 +721,8 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
         if st.users.is_none() {
             ui.label(if st.mode == Mode::File { "Open a RadioID user file to begin." } else { "Add regions and fetch their users to begin." });
         } else {
-            let mut t = format!("{count} of {total} users selected.");
-            if count > 0 {
+            let mut t = if updating { format!("Counting… (of {total} users)") } else { format!("{count} of {total} users selected.") };
+            if count > 0 && !updating {
                 t += &format!(" ID database size: {} KB.", size.bytes.div_ceil(1024));
                 if size.fit != usize::MAX && count > size.fit {
                     t += &format!(" This radio holds only {} at this text length; the rest would be left out. Use a shorter text length or fewer regions.", size.fit);
@@ -651,14 +731,19 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
             ui.label(t);
         }
         ui.horizontal(|ui| {
-            if ui.add_enabled(count > 0, theme::primary(ui, "Write ID Database", 14.0)).clicked() {
+            let ready = count > 0 && !updating;
+            let write = ui.add_enabled(ready, theme::primary(ui, "Write ID Database", 14.0));
+            if std::mem::take(&mut st.scroll_to_actions) {
+                write.scroll_to_me(Some(egui::Align::Center));
+            }
+            if write.clicked() {
                 if doc.cp.iddb.is_some() {
                     st.confirm = Some(Confirm::Replace);
                 } else {
                     st.write_db(doc, facts);
                 }
             }
-            if ui.add_enabled(count > 0, egui::Button::new("Add as Contacts")).clicked() {
+            if ui.add_enabled(ready, egui::Button::new("Add as Contacts")).clicked() {
                 st.add_contacts(doc);
             }
         });

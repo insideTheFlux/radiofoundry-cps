@@ -18,7 +18,9 @@ fn type_label(t: CallType) -> &'static str {
     }
 }
 
-pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
+/// Returns true when the person pressed "Add from RadioID" (the ID Database tab is where that is done).
+pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) -> bool {
+    let mut to_radioid = false;
     ui.horizontal(|ui| {
         if ui
             .add_enabled(
@@ -55,6 +57,9 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
                     l.contacts.retain(|&n| n != number);
                 }
             }
+        }
+        if ui.button("Add from RadioID").clicked() {
+            to_radioid = true;
         }
         ui.label(
             egui::RichText::new(format!(
@@ -149,4 +154,5 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
                 }
             });
         });
+    to_radioid
 }
