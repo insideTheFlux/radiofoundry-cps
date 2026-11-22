@@ -40,7 +40,7 @@ bar and buttons (a native Wayland window gets a plain frame there). `RFCPS_WAYLA
 
 | Platform | How |
 |---|---|
-| Linux (Ubuntu, Debian) | `packaging/build-linux.sh` makes `dist/*.tar.gz` and `dist/*.deb` |
+| Linux (Ubuntu, Debian) | `packaging/build-linux.sh` makes `dist/*.tar.gz` and `dist/*.deb`; the tarball has an `install.sh` (per user, or `PREFIX=/usr/local sudo ./install.sh`; `./install.sh uninstall` removes it) |
 | Windows 11 | on a Windows computer with Rust and the Visual Studio C++ Build Tools: `powershell -ExecutionPolicy Bypass -File packaging\build-windows.ps1` makes `dist\*.zip` with `rfcps.exe` |
 | Both | `.github/workflows/release.yml` builds and tests both on GitHub when it is run, or when a `v*` tag is pushed |
 

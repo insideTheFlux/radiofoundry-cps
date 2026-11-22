@@ -595,6 +595,8 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // egui leaves its root window node unnamed; a screen reader then announces an empty window
+        ui.ctx().accesskit_node_builder(egui::accesskit_root_id(), |n| n.set_label("RadioFoundry CPS"));
         self.poll_read();
         if let Some(d) = &self.doc {
             let key = (self.doc_serial, d.generation);

@@ -12,7 +12,7 @@ cargo build --release -p rfcps
 python3 packaging/third_party_licenses.py dist/THIRD_PARTY_LICENSES.txt x86_64-unknown-linux-gnu
 rm -rf dist/stage dist/rfcps-"$VERSION"-linux-"$ARCH".tar.gz
 mkdir -p dist/stage/rfcps-"$VERSION"
-cp target/release/rfcps packaging/rfcps.desktop packaging/rfcps.png LICENSE AUTHORS CONTRIBUTORS NOTICE.md README.md dist/THIRD_PARTY_LICENSES.txt dist/stage/rfcps-"$VERSION"/
+cp target/release/rfcps packaging/rfcps.desktop packaging/rfcps.png packaging/install.sh LICENSE AUTHORS CONTRIBUTORS NOTICE.md README.md dist/THIRD_PARTY_LICENSES.txt dist/stage/rfcps-"$VERSION"/
 tar -C dist/stage -czf dist/rfcps-"$VERSION"-linux-"$ARCH".tar.gz rfcps-"$VERSION"
 echo "dist/rfcps-$VERSION-linux-$ARCH.tar.gz"
 
