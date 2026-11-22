@@ -45,6 +45,8 @@ The ID database tab is covered by GUI tests (build a database from a user file, 
 Save image
 asks before it carries a secret key (a GUI test; the file dialog itself is not driven).
 
+`crates/link/examples/edit_test.rs` is a write test of the table edits on a real radio, in three steps the owner watches: `apply` saves the codeplug and adds a receive-only channel, a zone, a group and a private contact, an RX group list and a boot text line in one write; `delete` takes them away; `restore` writes the saved codeplug back. `edit_test fake:IMAGE.bin DIR rehearse` runs all three on a software radio first. On a DM-32UV (2026-11-21) the channel, zone, contacts and group list showed on the radio (a group list only shows in a channel's RX group list picker), and after the restore the codeplug was identical to the backup.
+
 Not covered: native file dialogs, the serial write itself (the software-radio tests in `rfcps-link` and the hand test
 on a radio cover it), and pixel snapshots (`egui_kittest`'s `snapshot` feature, not enabled).
 
