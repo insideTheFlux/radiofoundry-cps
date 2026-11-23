@@ -32,6 +32,15 @@ Version 0.5.1, light theme, on an invented test image (no real radio, call signs
 
 ![The Systems tab showing a recommended ham Tier III system added from a site's control channel: network model Huge, NET 1, category A, color code 1, registration with the talkgroups on.](docs/images/ham-system.png)
 
+<img width="1400" height="850" alt="05-contacts" src="https://github.com/user-attachments/assets/bf778325-c3e5-43a0-bc79-66506486d57d" />
+
+<img width="1400" height="850" alt="06-id-database" src="https://github.com/user-attachments/assets/92879264-704f-4b73-a8ba-5bedfc9dff28" />
+
+<img width="1400" height="850" alt="07-general" src="https://github.com/user-attachments/assets/190914d4-f98d-438a-8a8a-4c0499ee9ff7" />
+
+
+
+
 ## Screen readers
 
 The program publishes every control to screen readers (AccessKit: UI Automation on Windows, AT-SPI on Linux), with a
