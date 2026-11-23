@@ -41,6 +41,8 @@ Without a window: `rfcps --ports` lists serial ports, `rfcps --read PORT out.bin
 
 On Linux, to use a serial port add your user to the `dialout` group (`sudo usermod -aG dialout $USER`) and log in again.
 
+If the radio's cable does not appear as a port at all (no `/dev/ttyUSB0` when it is plugged in), some Ubuntu versions run `brltty`, a braille-display service that takes over USB serial cables with the CH340 chip; removing it (`sudo apt remove brltty`) brings the port back. This has not been tried on a fresh install here, so treat it as a known cause, not a certain one. A screen reader user who needs `brltty` should leave it installed and check `dmesg` for what claimed the cable.
+
 On a Wayland desktop (the Ubuntu default) the window runs on X11 through XWayland, so the desktop draws its normal title
 bar and buttons (a native Wayland window gets a plain frame there). `RFCPS_WAYLAND=1 rfcps` keeps native Wayland.
 
