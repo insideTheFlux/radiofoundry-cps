@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 insideTheFlux
 
-//! `p25_test PORT BACKUP_DIR apply|zone|watch SECONDS|restore BACKUP.bin` follows a live P25 trunked system, RECEIVE ONLY:
+//! `p25_test PORT BACKUP_DIR apply SITE:MHZ[,MHZ]...|zone|watch SECONDS|restore BACKUP.bin` follows a live P25 trunked
+//! system, RECEIVE ONLY:
 //!
-//! - `apply`: saves the codeplug, then adds a LISTEN-ONLY P25 trunked system "ZZ P25 TEST" with the VHF sites below (the
-//!   Riverside County sites at 161.8-162.0 MHz, NAC any) and a channel "ZZ P25 TEST" on it whose transmit flag is off.
+//! - `apply SITE:MHZ[,MHZ]...`: saves the codeplug, then adds a LISTEN-ONLY P25 trunked system "ZZ P25 TEST" with the sites
+//!   given (a site number and its control channels in MHz, for example `21:161.85,161.9125 22:161.8875`; NAC any) and a
+//!   channel "ZZ P25 TEST" on it whose transmit flag is off. Use the sites of a system you can hear, in a band the radio
+//!   receives.
 //! - `zone`: puts the test channel in a zone of its own, so it can be selected on the radio (a channel in no zone can't be).
 //! - `watch SECONDS`: read only; polls the radio's p25_trunk view (debuglink.md, view 37) once a second while the owner has
 //!   the channel selected on the radio, and prints what the follower does.
@@ -18,14 +21,16 @@ use rfcps_core::systems::{EntryBody, SysEntry, System, SYSTEM_P25_TRUNK};
 use rfcps_core::{Codeplug, Image};
 use std::collections::BTreeMap;
 
-/// (site number, control channels in Hz): RadioReference's sites 121 to 125 of the Riverside County system.
-const SITES: [(u8, [u32; 2]); 5] = [
-    (21, [161_850_000, 161_912_500]),
-    (22, [161_887_500, 161_950_000]),
-    (23, [161_900_000, 162_000_000]),
-    (24, [161_862_500, 161_925_000]),
-    (25, [161_875_000, 161_937_500]),
-];
+/// A site as given on the command line: `NUMBER:MHZ[,MHZ]...`, the site number and its control channels in Hz.
+fn parse_site(arg: &str) -> Option<(u8, Vec<u32>)> {
+    let (site, ccs) = arg.split_once(':')?;
+    let ccs: Vec<u32> = ccs
+        .split(',')
+        .map(|m| m.trim().parse::<f64>().ok().filter(|f| (30.0..=1000.0).contains(f)).map(|f| (f * 1e6).round() as u32))
+        .collect::<Option<_>>()?;
+    (!ccs.is_empty()).then_some((site.trim().parse().ok()?, ccs))
+}
+
 const NAME: &str = "ZZ P25 TEST";
 
 fn main() {
@@ -33,7 +38,7 @@ fn main() {
     let (port, dir, step) = match &a[..] {
         [p, d, s, ..] if ["apply", "zone", "watch", "restore"].contains(&s.as_str()) => (p, std::path::Path::new(d), s.as_str()),
         _ => {
-            eprintln!("usage: p25_test PORT BACKUP_DIR apply|zone|watch SECONDS|restore BACKUP.bin");
+            eprintln!("usage: p25_test PORT BACKUP_DIR apply SITE:MHZ[,MHZ]...|zone|watch SECONDS|restore BACKUP.bin");
             std::process::exit(2);
         }
     };
@@ -71,13 +76,17 @@ fn main() {
         let backup = dir.join(format!("p25-test-before-{secs}.bin"));
         std::fs::write(&backup, base.bytes()).unwrap_or_else(|e| die(&e));
         println!("backup of the radio's codeplug: {}", backup.display());
+        let sites: Vec<(u8, Vec<u32>)> = a[3..].iter().map(|x| parse_site(x).unwrap_or_else(|| die(&format!("not a site (NUMBER:MHZ[,MHZ]...): {x}")))).collect();
+        if sites.is_empty() {
+            die(&"apply needs at least one site, for example 21:161.85,161.9125");
+        }
         let mut cp = Codeplug::decode(&base);
         if cp.systems.iter().any(|s| s.name == NAME) || cp.channels.iter().any(|c| c.name == NAME) {
             die(&"a ZZ P25 TEST system or channel is already there: restore first");
         }
         let mut sys = System::new(SYSTEM_P25_TRUNK, NAME);
         assert!(!sys.tx, "a new P25 trunked system must be listen only");
-        for (i, (site, ccs)) in SITES.iter().enumerate() {
+        for (i, (site, ccs)) in sites.iter().enumerate() {
             sys.entries.push(SysEntry { cls: 1, group: i as u8, control: false, flags: 0, body: EntryBody::P25Site { rfss: Some(1), site: Some(*site) }, raw: Vec::new() });
             for &hz in ccs {
                 sys.entries.push(SysEntry { cls: 0, group: i as u8, control: true, flags: 0, body: EntryBody::P25Control { iden: 0, chan_no: 0, rx_hz: hz, tx_hz: 0 }, raw: Vec::new() });
@@ -86,7 +95,7 @@ fn main() {
         sys.number = (1..=255).find(|n| !cp.systems.iter().any(|s| s.number == *n)).unwrap_or_else(|| die(&"no free system number"));
         cp.systems.push(sys);
         let n = (1..=MAX_CHANNELS as u16).find(|n| !cp.channels.iter().any(|c| c.number == *n)).unwrap_or_else(|| die(&"no free channel"));
-        let mut c = Channel::new(n, SITES[0].1[0].into(), SITES[0].1[0].into());
+        let mut c = Channel::new(n, sites[0].1[0].into(), sites[0].1[0].into());
         c.name = NAME.to_string();
         set_kind(&mut c, KIND_P25_TRUNK, Mode::Dmr, &cp.systems);
         assert!(c.tagged.as_ref().is_some_and(|t| !t.tx), "the channel must not transmit");
@@ -117,9 +126,10 @@ fn main() {
     println!("the radio now holds: the test system {}, {} systems, {} channels", if have { "PRESENT" } else { "absent" }, now.systems.len(), now.channels.len());
     if step == "apply" {
         let s = now.systems.iter().find(|s| s.name == NAME);
-        let ok = s.is_some_and(|s| !s.tx && s.entries.iter().filter(|e| e.cls == 0 && e.control).count() == 10)
+        let want: usize = a[3..].iter().filter_map(|x| parse_site(x)).map(|(_, c)| c.len()).sum();
+        let ok = s.is_some_and(|s| !s.tx && s.entries.iter().filter(|e| e.cls == 0 && e.control).count() == want)
             && now.channels.iter().any(|c| c.name == NAME && c.kind() == KIND_P25_TRUNK && c.tagged.as_ref().is_some_and(|t| !t.tx));
-        println!("read back: {}", if ok { "listen-only system with 10 control channels, and a receive-only channel on it" } else { "SOMETHING DIFFERS" });
+        println!("read back: {}", if ok { format!("listen-only system with {want} control channels, and a receive-only channel on it") } else { "SOMETHING DIFFERS".to_string() });
         if !ok {
             std::process::exit(1);
         }
@@ -134,4 +144,20 @@ fn parse(text: &str) -> BTreeMap<String, String> {
 fn die(e: &dyn std::fmt::Display) -> ! {
     eprintln!("error: {e}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_site;
+
+    #[test]
+    fn a_site_is_a_number_and_its_control_channels_in_mhz() {
+        assert_eq!(parse_site("21:161.85,161.9125"), Some((21, vec![161_850_000, 161_912_500])));
+        assert_eq!(parse_site(" 3 : 851.0125 "), Some((3, vec![851_012_500])));
+        assert_eq!(parse_site("21"), None);
+        assert_eq!(parse_site("21:"), None);
+        assert_eq!(parse_site("300:161.85"), None);
+        assert_eq!(parse_site("1:abc"), None);
+        assert_eq!(parse_site("1:5"), None);
+    }
 }
