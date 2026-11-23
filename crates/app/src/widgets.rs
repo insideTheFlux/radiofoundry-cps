@@ -19,6 +19,22 @@ pub fn parse_mhz(text: &str) -> Option<u64> {
     ((30.0..=1000.0).contains(&mhz)).then(|| (mhz * 1e5).round() as u64 * 10)
 }
 
+/// Runs a file chooser on its own thread and sends back the paths picked (none: cancelled). The window stays alive
+/// meanwhile: it keeps drawing and answers the desktop, which would otherwise offer "Force Quit" after a few seconds of
+/// a chooser that blocks it. The window is repainted when the answer arrives.
+pub fn spawn_dialog(
+    ctx: egui::Context,
+    run: impl FnOnce(rfd::FileDialog) -> Vec<std::path::PathBuf> + Send + 'static,
+) -> std::sync::mpsc::Receiver<Vec<std::path::PathBuf>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let paths = run(rfd::FileDialog::new());
+        let _ = tx.send(paths);
+        ctx.request_repaint();
+    });
+    rx
+}
+
 /// A text field that applies its text only when `accept` gives a value for it; while it is being typed the text
 /// stays as typed, and a rejected text is outlined in red.
 pub fn checked_text<T: Clone>(

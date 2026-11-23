@@ -132,6 +132,8 @@ impl Prefs {
 }
 
 pub struct IdDbUi {
+    /// The file chooser, while it is open.
+    chooser: Option<std::sync::mpsc::Receiver<Vec<std::path::PathBuf>>>,
     users: Option<Arc<Vec<User>>>,
     source: String,
     country: String,
@@ -184,6 +186,7 @@ enum Confirm {
 impl Default for IdDbUi {
     fn default() -> Self {
         Self {
+            chooser: None,
             users: None,
             source: String::new(),
             country: String::new(),
@@ -260,10 +263,26 @@ impl IdDbUi {
         radioid::select(users, &self.selection())
     }
 
-    fn open_file(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("RadioID user file", &["csv", "txt"]).pick_file() else {
+    /// Opens the file chooser on its own thread, so the window stays alive while it is up.
+    fn open_file(&mut self, ctx: &egui::Context) {
+        if self.chooser.is_some() {
             return;
+        }
+        self.chooser = Some(crate::widgets::spawn_dialog(ctx.clone(), |d| {
+            d.add_filter("RadioID user file", &["csv", "txt"]).pick_file().into_iter().collect()
+        }));
+    }
+
+    /// Takes the file the chooser gave, when it has.
+    fn poll_file(&mut self) {
+        let Some(rx) = &self.chooser else { return };
+        let paths = match rx.try_recv() {
+            Ok(p) => p,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
         };
+        self.chooser = None;
+        let Some(path) = paths.into_iter().next() else { return };
         let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         match std::fs::read(&path) {
             Ok(b) => self.load_users(&String::from_utf8_lossy(&b), name),
@@ -435,6 +454,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
     let pal = theme::palette(ui);
     st.poll_download();
     st.poll_fetch();
+    st.poll_file();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_max_width(760.0);
         // The current database
@@ -481,7 +501,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
         if st.mode == Mode::File {
         ui.horizontal(|ui| {
             if ui.add_enabled(st.download.is_none(), egui::Button::new("Open user.csv")).clicked() {
-                st.open_file();
+                st.open_file(ui.ctx());
             }
             if st.download.is_none() {
                 if ui.button("Download from RadioID.net").clicked() {
