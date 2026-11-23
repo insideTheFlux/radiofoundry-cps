@@ -24,7 +24,7 @@ image layout are shared, but none has been tried; see [Adding a radio](docs/addi
 
 ## Screenshots
 
-Version 0.5.1, light theme, on an invented test image (no real radio, call signs or names).
+Version 0.5.1, light/dark theme, on an invented test image (no real radio, call signs or names).
 
 ![The Channels tab: a table of 39 channels with name, RX and TX frequency, mode, power, tones and TX contact, and on the right the form of channel 7, a P25 trunked channel on the system "Prep P25T".](docs/images/channels.png)
 
