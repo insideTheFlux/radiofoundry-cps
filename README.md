@@ -28,6 +28,9 @@ Version 0.5.1, light theme, on an invented test image (no real radio, call signs
 
 ![The Channels tab: a table of 39 channels with name, RX and TX frequency, mode, power, tones and TX contact, and on the right the form of channel 7, a P25 trunked channel on the system "Prep P25T".](docs/images/channels.png)
 
+<img width="1400" height="850" alt="08-channels-dark" src="https://github.com/user-attachments/assets/1757ee12-0184-4f80-bae3-9b0f32620fa2" />
+
+
 ![The Systems tab with an NXDN conventional system selected: its name, transmit side and radio ID, and a Traffic keys table of two scrambler keys whose seeds are hidden and shown as "Set".](docs/images/nxdn-keys.png)
 
 ![The Systems tab showing a recommended ham Tier III system added from a site's control channel: network model Huge, NET 1, category A, color code 1, registration with the talkgroups on.](docs/images/ham-system.png)
