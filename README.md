@@ -28,21 +28,17 @@ Version 0.5.1, light/dark theme, on an invented test image (no real radio, call 
 
 ![The Channels tab: a table of 39 channels with name, RX and TX frequency, mode, power, tones and TX contact, and on the right the form of channel 7, a P25 trunked channel on the system "Prep P25T".](docs/images/channels.png)
 
-<img width="1400" height="850" alt="08-channels-dark" src="https://github.com/user-attachments/assets/1757ee12-0184-4f80-bae3-9b0f32620fa2" />
-
+![The same Channels tab in the dark theme: the table of 39 channels, and the form of channel 7 on the right.](https://github.com/user-attachments/assets/1757ee12-0184-4f80-bae3-9b0f32620fa2)
 
 ![The Systems tab with an NXDN conventional system selected: its name, transmit side and radio ID, and a Traffic keys table of two scrambler keys whose seeds are hidden and shown as "Set".](docs/images/nxdn-keys.png)
 
 ![The Systems tab showing a recommended ham Tier III system added from a site's control channel: network model Huge, NET 1, category A, color code 1, registration with the talkgroups on.](docs/images/ham-system.png)
 
-<img width="1400" height="850" alt="05-contacts" src="https://github.com/user-attachments/assets/bf778325-c3e5-43a0-bc79-66506486d57d" />
+![The Contacts tab: a table of 14 contacts with name, DMR ID, call type and timeslot, such as Talkgroup 1, Local 91, Worldwide and Private Call.](https://github.com/user-attachments/assets/bf778325-c3e5-43a0-bc79-66506486d57d)
 
-<img width="1400" height="850" alt="06-id-database" src="https://github.com/user-attachments/assets/92879264-704f-4b73-a8ba-5bedfc9dff28" />
+![The ID Database tab: the codeplug holds a compact DMR ID database of 1,800 records, and below it the four steps to build one from RadioID.net (users, regions, filters and text).](https://github.com/user-attachments/assets/92879264-704f-4b73-a8ba-5bedfc9dff28)
 
-<img width="1400" height="850" alt="07-general" src="https://github.com/user-attachments/assets/190914d4-f98d-438a-8a8a-4c0499ee9ff7" />
-
-
-
+![The General tab: the radio name and DMR ID, call hang times, the two boot text lines, the ARS server and IP gateway IDs, and the tones.](https://github.com/user-attachments/assets/190914d4-f98d-438a-8a8a-4c0499ee9ff7)
 
 ## Screen readers
 
