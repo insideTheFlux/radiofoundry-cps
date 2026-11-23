@@ -22,6 +22,16 @@ image layout are shared, but none has been tried; see [Adding a radio](docs/addi
 - Imports a stock DM-32UV backup (the web installer's `.zip`), qdmr YAML codeplugs, CHIRP CSV and CSV tables; exports qdmr YAML, CSV tables and CHIRP CSV. A qdmr file carries the systems and channel modes in a `radioFoundry` block that qdmr ignores (keys are never written).
   CSV, CHIRP and qdmr files are the web editor's: they work in both editors.
 
+## Screenshots
+
+Version 0.5.1, light theme, on an invented test image (no real radio, call signs or names).
+
+![The Channels tab: a table of 39 channels with name, RX and TX frequency, mode, power, tones and TX contact, and on the right the form of channel 7, a P25 trunked channel on the system "Prep P25T".](docs/images/channels.png)
+
+![The Systems tab with an NXDN conventional system selected: its name, transmit side and radio ID, and a Traffic keys table of two scrambler keys whose seeds are hidden and shown as "Set".](docs/images/nxdn-keys.png)
+
+![The Systems tab showing a recommended ham Tier III system added from a site's control channel: network model Huge, NET 1, category A, color code 1, registration with the talkgroups on.](docs/images/ham-system.png)
+
 ## Screen readers
 
 The program publishes every control to screen readers (AccessKit: UI Automation on Windows, AT-SPI on Linux), with a
