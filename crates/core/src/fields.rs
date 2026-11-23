@@ -70,13 +70,70 @@ pub fn get_tone(b: &[u8], off: usize) -> String {
     }
 }
 
-/// A name field: text up to the first 0x00 or 0xFF. Bytes are Latin-1, as the radio's font takes them.
+/// font.h's extra glyphs: a character with no Latin-1 byte, then the byte the radio draws it as. The middle dot (0xB7)
+/// and the degree sign (0xB0) keep their Latin-1 bytes.
+const TEXT_TO_BYTE: [(char, u8); 4] = [('\u{2026}', 0x80), ('\u{2192}', 0x82), ('\u{2912}', 0x84), ('\u{2913}', 0x85)];
+
+fn glyph_byte(ch: char) -> Option<u8> {
+    TEXT_TO_BYTE.iter().find(|(c, _)| *c == ch).map(|&(_, b)| b)
+}
+
+fn byte_glyph(b: u8) -> Option<char> {
+    TEXT_TO_BYTE.iter().find(|&&(_, x)| x == b).map(|&(c, _)| c)
+}
+
+/// A name field holds the text the radio draws: ASCII and Latin-1 (U+00A0 to U+00FF) one byte each, font.h's glyphs their
+/// byte, and other characters (Chinese) UTF-8, three bytes a character. The radio's text layer reads a three-byte
+/// sequence as one character and anything else as one byte, so this mirrors it. The text ends at the first 0x00 or 0xFF.
 pub fn get_name(b: &[u8], off: usize, len: usize) -> String {
-    b[off..off + len]
-        .iter()
-        .take_while(|&&c| c != 0x00 && c != 0xFF)
-        .map(|&c| char::from(c))
-        .collect()
+    let mut s = String::new();
+    let mut i = 0;
+    while i < len {
+        let c = b[off + i];
+        if c == 0x00 || c == 0xFF {
+            break;
+        }
+        if let Some(g) = byte_glyph(c) {
+            s.push(g);
+            i += 1;
+            continue;
+        }
+        if c & 0xF0 == 0xE0 && i + 2 < len {
+            let (c1, c2) = (b[off + i + 1], b[off + i + 2]);
+            if c1 & 0xC0 == 0x80 && c2 & 0xC0 == 0x80 {
+                let cp = (u32::from(c & 0x0F) << 12) | (u32::from(c1 & 0x3F) << 6) | u32::from(c2 & 0x3F);
+                if cp >= 0x800 {
+                    if let Some(ch) = char::from_u32(cp) {
+                        s.push(ch);
+                        i += 3;
+                        continue;
+                    }
+                }
+            }
+        }
+        s.push(char::from(c));
+        i += 1;
+    }
+    s
+}
+
+/// The bytes a name field takes, by `put_name`'s rules: a character the radio draws is one byte, Chinese is three.
+pub fn name_bytes(text: &str) -> usize {
+    text.chars()
+        .map(|ch| {
+            if glyph_byte(ch).is_some() {
+                return 1;
+            }
+            let cp = u32::from(ch);
+            if (0x20..0x7F).contains(&cp) || (0xA0..=0xFF).contains(&cp) {
+                1
+            } else if (0x800..=0xFFFF).contains(&cp) {
+                3
+            } else {
+                1
+            }
+        })
+        .sum()
 }
 
 /// 24-bit coordinate: bit 23 sign (south / west), bits 22-15 whole degrees, bits 14-0 1/10000 degree.
@@ -117,16 +174,29 @@ pub fn put_bcd_id(b: &mut [u8], off: usize, id: u32) {
     b[off..off + 4].copy_from_slice(&to_bcd(id, 8).to_be_bytes());
 }
 
-/// The text, then 0xFF padding. Characters outside Latin-1 (and 0xFF itself) become '?'.
+/// The text, then 0xFF padding, a character never cut in half. A character the radio can't draw (a control character, one
+/// of two bytes, one above the BMP) becomes '?'.
 pub fn put_name(b: &mut [u8], off: usize, len: usize, text: &str) {
     b[off..off + len].fill(0xFF);
-    for (i, ch) in text.chars().take(len).enumerate() {
-        let c = u32::from(ch);
-        b[off + i] = if c < 0x100 && c != 0xFF {
-            c as u8
+    let mut i = 0;
+    for ch in text.chars() {
+        let cp = u32::from(ch);
+        let bytes: Vec<u8> = if let Some(g) = glyph_byte(ch) {
+            vec![g]
+        } else if cp == 0x81 || cp == 0x83 || (0x20..0x7F).contains(&cp) || (0xA0..0xFF).contains(&cp) {
+            vec![cp as u8]
+        } else if (0x800..=0xFFFF).contains(&cp) {
+            vec![0xE0 | (cp >> 12) as u8, 0x80 | ((cp >> 6) & 0x3F) as u8, 0x80 | (cp & 0x3F) as u8]
         } else {
-            b'?'
+            vec![b'?']
         };
+        if i + bytes.len() > len {
+            break;
+        }
+        for by in bytes {
+            b[off + i] = by;
+            i += 1;
+        }
     }
 }
 
@@ -273,10 +343,30 @@ mod tests {
         put_bcd_id(&mut b, 4, 3_100_123);
         assert_eq!(get_bcd_id(&b, 4), 3_100_123);
         put_name(&mut b, 8, 8, "Caf\u{e9} \u{20ac}");
-        assert_eq!(get_name(&b, 8, 8), "Caf\u{e9} ?");
+        assert_eq!(get_name(&b, 8, 8), "Caf\u{e9} \u{20ac}"); // a character the font lacks is kept as UTF-8, three bytes
         for x in [0.0, 33.6777, -117.1693, 40.0001, -0.5] {
             let [h, m, l] = coord_bytes(x);
             assert!((get_coord(h, m, l) - x).abs() < 0.00005, "{x}");
         }
     }
+
+    #[test]
+    fn a_name_holds_chinese_as_three_bytes_and_never_cuts_a_character() {
+        let mut b = [0u8; 8];
+        put_name(&mut b, 0, 8, "\u{4e2d}\u{6587}\u{540d}");
+        // two characters fit in 8 bytes (6 used); the third would be cut, so it is left out
+        assert_eq!(get_name(&b, 0, 8), "\u{4e2d}\u{6587}");
+        assert_eq!(&b[6..], &[0xFF, 0xFF]);
+        assert_eq!(name_bytes("\u{4e2d}\u{6587}a"), 7);
+        assert_eq!(name_bytes("Caf\u{e9}"), 4);
+    }
+
+    #[test]
+    fn the_fonts_glyphs_and_unsupported_characters() {
+        let mut b = [0u8; 8];
+        put_name(&mut b, 0, 8, "a\u{2026}\u{2192}\u{1F600}\u{7}");
+        assert_eq!(&b[..5], &[b'a', 0x80, 0x82, b'?', b'?']);
+        assert_eq!(get_name(&b, 0, 8), "a\u{2026}\u{2192}??");
+    }
 }
+

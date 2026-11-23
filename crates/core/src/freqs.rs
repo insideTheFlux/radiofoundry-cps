@@ -46,6 +46,18 @@ pub fn set_weather_rx_only(cp: &mut crate::model::Codeplug) -> usize {
     n
 }
 
+/// A channel whose RX is in a listen band is RX only with TX on RX, as the radio's channel editor saves it: no stray TX
+/// frequency from before (a channel read, imported or edited elsewhere) is shown, exported or written. A TX frequency in
+/// a listen band makes the channel RX only too (no radio transmits there).
+pub fn follow_listen(c: &mut Channel) {
+    if listen_band(c.rx_hz).is_some() {
+        c.rx_only = true;
+        c.tx_hz = c.rx_hz;
+    } else if listen_band(c.tx_hz).is_some() {
+        c.rx_only = true;
+    }
+}
+
 /// Sets the receive frequency.
 pub fn set_rx(c: &mut Channel, new_rx: u64) {
     let simplex = c.tx_hz == c.rx_hz;

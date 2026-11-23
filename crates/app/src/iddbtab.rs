@@ -539,21 +539,9 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
             combo.response.labelled_by(lbl.id);
             let ok = COUNTRIES.iter().any(|(n, _, _)| *n == st.country);
             if ui.add_enabled(ok, egui::Button::new("Add Region")).clicked() {
-                let country = st.country.clone();
-                if st.states.is_empty() {
-                    st.regions.retain(|(c, _)| *c != country);
-                    st.regions.push((country, None));
-                } else {
-                    let whole = st.regions.iter().any(|(c, s)| *c == country && s.is_none());
-                    if !whole {
-                        for s in std::mem::take(&mut st.states) {
-                            if !st.regions.iter().any(|(c, x)| *c == country && x.as_deref() == Some(s.as_str())) {
-                                st.regions.push((country.clone(), Some(s)));
-                            }
-                        }
-                    }
-                    st.states.clear();
-                }
+                let states: Vec<String> = st.states.iter().cloned().collect();
+                st.regions = radioid::add_region(&st.regions, &st.country, &states);
+                st.states.clear();
             }
         });
         if let Some((_, _, states)) = COUNTRIES.iter().find(|(n, _, _)| *n == st.country) {

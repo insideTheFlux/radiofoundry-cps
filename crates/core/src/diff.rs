@@ -47,8 +47,8 @@ fn channel_fields(a: &Channel, b: &Channel) -> Vec<&'static str> {
         "scan skip",
     );
     chk(
-        a.vox != b.vox || a.tone_burst != b.tone_burst,
-        "VOX or tone burst",
+        a.vox != b.vox || a.tone_burst != b.tone_burst || a.accept_bad_crc != b.accept_bad_crc,
+        "VOX, tone burst or invalid CRC",
     );
     chk(a.squelch != b.squelch, "squelch");
     chk(a.color_code != b.color_code, "color code");

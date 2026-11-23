@@ -182,6 +182,34 @@ fn key(s: &str) -> String {
     s.trim().to_lowercase()
 }
 
+/// Adds a whole country or some of its states to a region list. A whole country already in the list covers its states;
+/// adding a whole country replaces that country's states (the web editor's `addRegion`).
+pub fn add_region(
+    regions: &[(String, Option<String>)],
+    country: &str,
+    states: &[String],
+) -> Vec<(String, Option<String>)> {
+    let key = |s: &str| s.trim().to_lowercase();
+    let same = |c: &str| key(c) == key(country);
+    if regions.iter().any(|(c, st)| same(c) && st.is_none()) {
+        return regions.to_vec();
+    }
+    if states.is_empty() {
+        let mut out: Vec<_> = regions.iter().filter(|(c, _)| !same(c)).cloned().collect();
+        out.push((country.to_string(), None));
+        return out;
+    }
+    let mut out = regions.to_vec();
+    let mut have: std::collections::HashSet<String> =
+        regions.iter().filter(|(c, _)| same(c)).map(|(_, st)| key(st.as_deref().unwrap_or(""))).collect();
+    for st in states {
+        if have.insert(key(st)) {
+            out.push((country.to_string(), Some(st.clone())));
+        }
+    }
+    out
+}
+
 #[derive(Clone, Debug)]
 pub struct Selection {
     /// (country, state): a country alone is the whole country; none at all is every user.

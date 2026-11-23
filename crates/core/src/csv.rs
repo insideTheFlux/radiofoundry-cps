@@ -489,6 +489,7 @@ const CHANNEL_COLS: &[Col] = &[
     col("No Beep", "noBeep", &[]),
     col("No Eco", "noEco", &[]),
     col("DMO", "dmo", &[]),
+    col("Accept Invalid CRC", "acceptBadCrc", &[]),
     col("Roaming", "roam", &[]),
     col("Talker Alias TS1", "aliasTs1", &[]),
     col("Talker Alias TS2", "aliasTs2", &[]),
@@ -650,6 +651,7 @@ pub fn export_table(cp: &Codeplug, t: TableKind) -> String {
                     yes_no(c.no_beep),
                     yes_no(c.no_eco),
                     yes_no(c.dmo),
+                    yes_no(c.accept_bad_crc),
                     yes_no(c.roam),
                     c.alias_ts1.to_string(),
                     c.alias_ts2.to_string(),
@@ -768,7 +770,8 @@ fn set_channel(
         "rxHz" => c.rx_hz = as_freq(s, None)?,
         "txHz" => c.tx_hz = as_freq(s, None)?,
         "power" => c.power = as_power(s)?,
-        "tot" => c.tot = as_int(s, 0, 3825, Some(0))? as u16,
+        // the timeout rounds up to the 15 s steps the record stores, as the editor shows it
+        "tot" => c.tot = (as_int(s, 0, 3825, Some(0))? as u16).div_ceil(15) * 15,
         "bw" => {
             let v = s.trim().replace(',', ".").to_lowercase();
             let v = v.trim_end_matches("khz").trim();
@@ -795,6 +798,7 @@ fn set_channel(
         "noBeep" => c.no_beep = as_bool(s)?,
         "noEco" => c.no_eco = as_bool(s)?,
         "dmo" => c.dmo = as_bool(s)?,
+        "acceptBadCrc" => c.accept_bad_crc = as_bool(s)?,
         "roam" => c.roam = as_bool(s)?,
         "aliasTs1" => c.alias_ts1 = as_int(s, 0, 3, Some(0))? as u8,
         "aliasTs2" => c.alias_ts2 = as_int(s, 0, 3, Some(0))? as u8,

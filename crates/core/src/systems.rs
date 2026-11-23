@@ -136,6 +136,8 @@ pub fn site_max(model: u8) -> u16 {
 /// The options word's named bits (the others are kept as stored).
 pub const OPT_ALL_CALLS: u16 = 0x0002;
 pub const OPT_EMERGENCY_ANY: u16 = 0x0004;
+pub const OPT_FOLLOW_ALL: u16 = 0x0008;
+pub const OPT_LEARN_SYSTEM: u16 = 0x0010;
 pub const OPT_PRIVATE_CALLS: u16 = 0x0020;
 pub const OPT_REGISTER_TALKGROUPS: u16 = 0x0040;
 pub const OPT_ACCEPT_ALS: u16 = 0x0080;
@@ -145,6 +147,8 @@ pub const OPT_ACCEPT_STUN: u16 = 0x0400;
 pub const OPT_IP_GATEWAY: u16 = 0x1000;
 const OPT_MASK: u16 = OPT_ALL_CALLS
     | OPT_EMERGENCY_ANY
+    | OPT_FOLLOW_ALL
+    | OPT_LEARN_SYSTEM
     | OPT_PRIVATE_CALLS
     | OPT_REGISTER_TALKGROUPS
     | OPT_ACCEPT_ALS
@@ -164,6 +168,10 @@ pub struct T3System {
     pub color_code: u8,
     pub all_calls: bool,
     pub emergency_any: bool,
+    /// Play calls on every talkgroup of the system, not only the channel's RX group list.
+    pub follow_all: bool,
+    /// Take the first control channel heard as this system (only while the radio listens).
+    pub learn_system: bool,
     pub private_calls: bool,
     pub register_talkgroups: bool,
     pub accept_als: bool,
@@ -199,6 +207,8 @@ impl Default for T3System {
             color_code: 1,
             all_calls: false,
             emergency_any: false,
+            follow_all: false,
+            learn_system: false,
             private_calls: true,
             register_talkgroups: false,
             accept_als: false,
@@ -231,6 +241,8 @@ pub fn decode_t3(v: &[u8]) -> T3System {
         color_code: u8_at(v, 4) & 0x0F,
         all_calls: has(OPT_ALL_CALLS),
         emergency_any: has(OPT_EMERGENCY_ANY),
+        follow_all: has(OPT_FOLLOW_ALL),
+        learn_system: has(OPT_LEARN_SYSTEM),
         private_calls: has(OPT_PRIVATE_CALLS),
         register_talkgroups: has(OPT_REGISTER_TALKGROUPS),
         accept_als: has(OPT_ACCEPT_ALS),
@@ -260,6 +272,8 @@ pub fn encode_t3(s: &T3System, prev: Option<&[u8]>) -> Vec<u8> {
     let bits = [
         (s.all_calls, OPT_ALL_CALLS),
         (s.emergency_any, OPT_EMERGENCY_ANY),
+        (s.follow_all, OPT_FOLLOW_ALL),
+        (s.learn_system, OPT_LEARN_SYSTEM),
         (s.private_calls, OPT_PRIVATE_CALLS),
         (s.register_talkgroups, OPT_REGISTER_TALKGROUPS),
         (s.accept_als, OPT_ACCEPT_ALS),

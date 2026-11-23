@@ -461,6 +461,7 @@ fn t3_form(ui: &mut Ui, f: &mut T3System, number: u16) {
         combo(ui, ("t3_cat", number), "Category", if f.category_b { "B" } else { "A" }, &mut f.category_b, &items);
         let items: Vec<(u8, String)> = (0..16u8).map(|n| (n, n.to_string())).collect();
         combo(ui, ("t3_cc", number), "Color code", &f.color_code.to_string(), &mut f.color_code, &items);
+        check(ui, "Learn the system from the air", &mut f.learn_system);
     });
     ui.label(RichText::new(format!("NET goes up to {} in this network model.", sys::net_max(f.model))).size(13.0).color(muted));
 
@@ -478,6 +479,7 @@ fn t3_form(ui: &mut Ui, f: &mut T3System, number: u16) {
     egui::Grid::new(("t3_calls", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
         check(ui, "Follow all-calls", &mut f.all_calls);
         check(ui, "Follow emergency calls on any talkgroup", &mut f.emergency_any);
+        check(ui, "Follow every talkgroup", &mut f.follow_all);
         check(ui, "Follow private calls", &mut f.private_calls);
     });
 

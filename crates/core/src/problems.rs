@@ -6,7 +6,7 @@
 // `site/static/js/codeplug/model.js`) reports, as a list of problems a person can read. An error stops a write; a
 // warning is worth a look.
 
-use crate::fields::parse_tone;
+use crate::fields::{name_bytes, parse_tone};
 use crate::freqs::{is_weather, listen_band, ListenBand};
 use crate::model::Codeplug;
 use crate::modes::{Fallback, Params, NAC_ANY, NAC_REPEAT_ANY, NXDN_UNIT_MAX, P25_UNIT_MAX, P25_UNIT_WARN};
@@ -167,7 +167,7 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                 "The channel has no name.".into(),
             );
         }
-        if name.chars().count() > NAME_MAX {
+        if name_bytes(name) > NAME_MAX {
             add(
                 err,
                 Table::Channels,
@@ -248,20 +248,6 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                 ),
             );
         }
-        if let Some(b) = listen_band(c.tx_hz) {
-            if !c.rx_only {
-                add(
-                    warn,
-                    Table::Channels,
-                    n,
-                    name,
-                    format!(
-                        "The radio doesn't transmit in the {}; set the channel to RX only.",
-                        band_name(b)
-                    ),
-                );
-            }
-        }
         if c.contact != 0 && !cp.contacts.iter().any(|k| k.number == c.contact) {
             add(
                 warn,
@@ -326,10 +312,10 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
         if a.name.is_empty() {
             add(err, Table::Aprs, n, name, "The APRS configuration has no name.".into());
         }
-        if a.name.chars().count() > APRS_NAME_MAX {
+        if name_bytes(&a.name) > APRS_NAME_MAX {
             add(err, Table::Aprs, n, name, format!("The name is longer than {APRS_NAME_MAX} characters."));
         }
-        if a.comment.chars().count() > APRS_COMMENT_MAX {
+        if name_bytes(&a.comment) > APRS_COMMENT_MAX {
             add(err, Table::Aprs, n, name, format!("The comment is longer than {APRS_COMMENT_MAX} characters."));
         }
     }
@@ -540,7 +526,7 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                 "The zone has no name.".into(),
             );
         }
-        if z.name.chars().count() > NAME_MAX {
+        if name_bytes(&z.name) > NAME_MAX {
             add(
                 err,
                 Table::Zones,
@@ -590,7 +576,7 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                 "The contact has no name.".into(),
             );
         }
-        if c.name.chars().count() > NAME_MAX {
+        if name_bytes(&c.name) > NAME_MAX {
             add(
                 err,
                 Table::Contacts,

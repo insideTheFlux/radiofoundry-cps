@@ -105,6 +105,8 @@ pub struct Channel {
     pub sfr_a: u8,
     pub sfr_b: u8,
     pub tone_burst: bool,
+    /// Accept a call with an invalid CRC (SFR byte B bits 5-4 = 2).
+    pub accept_bad_crc: bool,
     /// What a live tag in the settings area makes of the channel (P25, NXDN, ...); `None` for a plain channel. A
     /// tagged channel's record is a safe stand-in, DMR and receive only (channel-modes.md 2.3).
     pub tagged: Option<crate::modes::Tagged>,
@@ -173,8 +175,9 @@ pub fn decode_channel(number: u16, r: &[u8]) -> Option<Channel> {
         alias_ts2: (r[0x30] >> 2) & 0x03,
         sfr: l1 & 0x02 != 0,
         sfr_a: r[0x25],
-        sfr_b: r[0x2A] & 0xBF,
+        sfr_b: r[0x2A] & !0x70,
         tone_burst: r[0x2A] != 0xFF && r[0x2A] & 0x40 != 0,
+        accept_bad_crc: r[0x2A] & 0x30 == 0x20, // 0xFF and 0xBF read as off
         tagged: None,
     })
 }
@@ -386,10 +389,7 @@ pub fn encode_channel(c: &Channel, r: &mut [u8]) {
         (r[0x24], r[0x1F], r[0x1E]) = (oh, om, ol);
     }
     r[0x25] = c.sfr_a;
-    r[0x2A] = (c.sfr_b & 0xBF) | if c.tone_burst { 0x40 } else { 0 };
-    if r[0x2A] == 0xFF {
-        r[0x2A] = 0xCF; // 0xFF reads as not set: the unused bits 5-4 cleared (as the firmware)
-    }
+    r[0x2A] = (c.sfr_b & 0x8F) | (if c.tone_burst { 0x40 } else { 0 }) | (if c.accept_bad_crc { 0x20 } else { 0 }); // bits 5-4 always written: never 0xFF
 }
 
 /// The 80-channel layout: name, channel numbers, zeros after the last.

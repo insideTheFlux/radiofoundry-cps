@@ -75,7 +75,8 @@ impl Codeplug {
                 continue;
             }
             let a = channel_addr(n);
-            if let Some(c) = decode_channel(n as u16, &b[a..a + CH_SIZE]) {
+            if let Some(mut c) = decode_channel(n as u16, &b[a..a + CH_SIZE]) {
+                crate::freqs::follow_listen(&mut c);
                 channels.push(c);
             }
         }
