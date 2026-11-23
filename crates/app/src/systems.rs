@@ -237,6 +237,7 @@ fn ham_dialog(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
     let mut open = true;
     let mut done = false;
     egui::Window::new(title).open(&mut open).collapsible(false).resizable(false).show(ui.ctx(), |ui| {
+        ui.set_min_width(520.0);
         ui.label("RadioFoundry recommends one identity and set of options for every ham system of this type, so a radio set up once works on any site. Enter the control channel of the site you use; the system is added with every setting shown, to check.");
         egui::Grid::new("ham_form").num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
             let l = ui.label("Name for the new system");
