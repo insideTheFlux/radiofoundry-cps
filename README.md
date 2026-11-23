@@ -22,6 +22,14 @@ image layout are shared, but none has been tried; see [Adding a radio](docs/addi
 - Imports a stock DM-32UV backup (the web installer's `.zip`), qdmr YAML codeplugs, CHIRP CSV and CSV tables; exports qdmr YAML, CSV tables and CHIRP CSV.
   CSV, CHIRP and qdmr files are the web editor's: they work in both editors.
 
+## Screen readers
+
+The program publishes every control to screen readers (AccessKit: UI Automation on Windows, AT-SPI on Linux), with a
+name on each table cell and field ("RX MHz, channel 5"). Listened to with Narrator on Windows 11 using the keyboard: the
+tables, drop-downs, check boxes, menus, dialogs and tabs all work, and adding and deleting a channel works. Use Tab and
+the arrow keys; a mouse click on a drop-down is not announced. Also tried with Orca on Ubuntu (GNOME): drop-downs, menus, dialogs and check boxes work. If
+the focus ever leaves a check box after you toggle it (seen once on Windows, not reproduced), Tab back to it and tell us. Tell us what you find.
+
 ## Run
 
 ```

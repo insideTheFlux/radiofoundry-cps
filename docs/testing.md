@@ -17,8 +17,21 @@ fields were found. Every tab now passes it, including the Channels, Contacts, DT
 The program publishes its controls to screen readers through AccessKit (AT-SPI on Linux, UI Automation on Windows).
 `tools/a11y_check.py` reads that from a running copy on Linux and reports how many controls have no name (needs
 accessibility switched on for the session; see the script). It was run against a 39-channel image: 0 unnamed controls,
-after 112 before the cells were named. How it sounds in Orca or Narrator has not been checked; the window frame itself still
-reports an empty name.
+after 112 before the cells were named; the window itself is named "RadioFoundry CPS".
+
+Listened to by hand, with Narrator on Windows 11 (2026-11-22, v0.4.2, using the keyboard): the window is announced; the
+Channels table reads each cell's name and value ("Name, channel 1", "RX MHz, channel 1"), says when text is deleted and
+echoes typing; drop-downs are announced when reached with Tab; check boxes toggle and the new state is spoken; the menus,
+the dialogs, the tabs (Channels, Contacts, Zones and the others) and adding and deleting a channel all work from the
+keyboard. The keyboard is the supported way: a drop-down clicked with the mouse is not announced, because a click does not
+move the keyboard focus, and Narrator's own scan-mode navigation did not read drop-downs either (not investigated).
+On Windows, one early test had the keyboard focus leave a check box after it toggled (Narrator announced "RadioFoundry CPS"
+and Space did nothing until the user Tabbed back). It did not happen again: later, repeated Space presses kept the focus
+in the editor and in a plain egui test window (three kinds of check box, the window named or not), and the cause was not
+found.
+
+Orca 50.3 on Ubuntu GNOME (2026-11-22), by hand: drop-downs, menus and dialogs work, and check boxes work better than on
+Windows: pressing Space again and again to check and uncheck keeps the focus on the check box.
 
 ```
 cargo test -p rfcps gui                              # the synthetic tests

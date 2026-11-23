@@ -24,8 +24,11 @@ Following a live P25 system was tried and found no signal (inconclusive). Not tr
 real Tier III key (these transmit or need a live network).
 
 Accessibility: the program publishes its controls to screen readers (AccessKit: AT-SPI on Linux, UI Automation on Windows),
-every table cell has a name ("RX MHz, channel 5"), and the tests check it. Verified through AT-SPI on Linux only; not yet
-heard in Orca or Narrator, and the window frame has no name.
+every table cell has a name ("RX MHz, channel 5"), the window is named, and the tests check it. Listened to with Narrator on
+Windows 11 (keyboard only: tables, drop-downs, check boxes, menus, dialogs, tabs, add and delete a channel all work). Known
+limit: use the keyboard; a mouse click on a drop-down is not announced. One early Windows test lost the focus after a check box toggled; it did not happen
+again and was not explained. Orca 50.3 on Ubuntu GNOME: names verified through AT-SPI and tried
+by hand; drop-downs, menus, dialogs and check boxes work, and the focus stays on a check box through repeated toggles.
 
 Not edited, as in the web editor: targets, target lists and traffic keys (kept byte for byte), DTMF signaling.
 Not planned: flashing firmware (it can brick a radio), Android and iOS, macOS.
