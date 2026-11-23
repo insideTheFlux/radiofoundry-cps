@@ -31,7 +31,8 @@ use rfcps_core::freqs;
 use rfcps_core::problems::{self, Level, Problem, Table};
 use rfcps_core::Image;
 use rfcps_link::PortInfo;
-use std::sync::mpsc::Receiver;
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use worker::Msg;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,6 +80,25 @@ struct App {
     confirm_keys: Option<usize>,
     /// The green or red bar under the toolbar after a write; the x closes it.
     banner: Option<(bool, String)>,
+    /// A file chooser that is open (on its own thread, so the window stays alive) and what to do with its answer.
+    chooser: Option<(Choose, Receiver<Vec<PathBuf>>)>,
+    /// The window's context, for the chooser's thread to repaint it.
+    ctx: Option<egui::Context>,
+}
+
+/// What a file chooser that is open is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Choose {
+    Open,
+    /// Save image, with or without the codeplug's secret keys.
+    Save(bool),
+    ImportChirp,
+    ImportQdmr,
+    ImportCsv,
+    ImportStock,
+    ExportQdmr,
+    ExportCsv,
+    ExportChirp,
 }
 
 impl App {
@@ -120,6 +140,8 @@ impl App {
             confirm_new: false,
             confirm_keys: None,
             banner: None,
+            chooser: None,
+            ctx: None,
         }
     }
 
@@ -209,21 +231,66 @@ impl App {
         }
     }
 
-    fn open_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Codeplug image", &["bin"])
-            .pick_file()
-        {
-            match std::fs::read(&path) {
-                Ok(b) => {
-                    self.open_image(&b, path.display().to_string());
-                    if let Some(d) = &mut self.doc {
-                        d.from_file = true;
-                    }
-                    self.status = format!("Opened {}.", path.display());
-                }
-                Err(e) => self.status = format!("Could not read {}: {e}", path.display()),
+    /// Opens a file chooser without blocking the window; `chosen` takes its answer.
+    fn pick(&mut self, what: Choose, run: impl FnOnce(rfd::FileDialog) -> Vec<PathBuf> + Send + 'static) {
+        if self.chooser.is_some() {
+            return;
+        }
+        let Some(ctx) = self.ctx.clone() else { return };
+        self.chooser = Some((what, widgets::spawn_dialog(ctx, run)));
+    }
+
+    /// Takes the answer of a file chooser when it has come.
+    fn poll_chooser(&mut self) {
+        let Some((what, rx)) = &self.chooser else { return };
+        let what = *what;
+        match rx.try_recv() {
+            Ok(paths) => {
+                self.chooser = None;
+                self.chosen(what, paths);
             }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => self.chooser = None,
+        }
+    }
+
+    fn chosen(&mut self, what: Choose, paths: Vec<PathBuf>) {
+        let Some(first) = paths.first().cloned() else { return };
+        match what {
+            Choose::Open => self.open_path(&first),
+            Choose::Save(keys) => self.save_to(&first, keys),
+            Choose::ImportChirp => self.run_import("Import CHIRP CSV", "CHIRP import", |cp| exchange::import_chirp_file(cp, &first)),
+            Choose::ImportQdmr => self.run_import("Import qdmr codeplug", "qdmr import", |cp| exchange::import_qdmr_file(cp, &first)),
+            Choose::ImportCsv => self.run_import("Import CSV tables", "CSV import", |cp| exchange::import_csv_files(cp, &paths)),
+            Choose::ImportStock => self.run_import("Import stock DM-32UV codeplug", "stock DM-32UV import", |cp| {
+                exchange::import_stock_file(cp, &first)
+            }),
+            Choose::ExportQdmr | Choose::ExportCsv | Choose::ExportChirp => {
+                let Some(doc) = &self.doc else { return };
+                let (title, r) = match what {
+                    Choose::ExportQdmr => ("Export qdmr codeplug", exchange::export_qdmr_file(&doc.cp, &first)),
+                    Choose::ExportCsv => ("Export CSV tables", exchange::export_csv_folder(&doc.cp, &first)),
+                    _ => ("Export CHIRP CSV", exchange::export_chirp_file(&doc.cp, &first)),
+                };
+                self.finish_export(title, r);
+            }
+        }
+    }
+
+    fn open_dialog(&mut self) {
+        self.pick(Choose::Open, |d| d.add_filter("Codeplug image", &["bin"]).pick_file().into_iter().collect());
+    }
+
+    fn open_path(&mut self, path: &std::path::Path) {
+        match std::fs::read(path) {
+            Ok(b) => {
+                self.open_image(&b, path.display().to_string());
+                if let Some(d) = &mut self.doc {
+                    d.from_file = true;
+                }
+                self.status = format!("Opened {}.", path.display());
+            }
+            Err(e) => self.status = format!("Could not read {}: {e}", path.display()),
         }
     }
 
@@ -239,20 +306,19 @@ impl App {
     }
 
     fn save_dialog(&mut self, include_keys: bool) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Codeplug image", &["bin"])
-            .set_file_name("codeplug.bin")
-            .save_file()
-        else {
-            return;
-        };
+        self.pick(Choose::Save(include_keys), |d| {
+            d.add_filter("Codeplug image", &["bin"]).set_file_name("codeplug.bin").save_file().into_iter().collect()
+        });
+    }
+
+    fn save_to(&mut self, path: &std::path::Path, include_keys: bool) {
         if let Some(d) = &mut self.doc {
             let mut img = d.encoded();
             let secrets = rfcps_core::kv::count_secrets(img.bytes());
             if !include_keys {
                 rfcps_core::kv::without_secrets(img.bytes_mut());
             }
-            match std::fs::write(&path, img.bytes()) {
+            match std::fs::write(path, img.bytes()) {
                 Ok(()) if secrets > 0 && !include_keys => {
                     // The file differs from the codeplug: it is not marked saved.
                     self.status = format!("Saved {} without its {secrets} secret key(s).", path.display());
@@ -295,90 +361,49 @@ impl App {
     }
 
     fn import_chirp_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
-            .add_filter("CHIRP CSV", &["csv"])
-            .pick_file()
-        {
-            self.run_import("Import CHIRP CSV", "CHIRP import", |cp| {
-                exchange::import_chirp_file(cp, &p)
-            });
-        }
+        self.pick(Choose::ImportChirp, |d| d.add_filter("CHIRP CSV", &["csv"]).pick_file().into_iter().collect());
     }
 
     fn import_qdmr_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
-            .add_filter("qdmr codeplug", &["yaml", "yml"])
-            .pick_file()
-        {
-            self.run_import("Import qdmr codeplug", "qdmr import", |cp| {
-                exchange::import_qdmr_file(cp, &p)
-            });
-        }
+        self.pick(Choose::ImportQdmr, |d| d.add_filter("qdmr codeplug", &["yaml", "yml"]).pick_file().into_iter().collect());
     }
 
     fn export_qdmr_dialog(&mut self) {
-        let (Some(doc), Some(p)) = (
-            &self.doc,
-            rfd::FileDialog::new()
-                .add_filter("qdmr codeplug", &["yaml"])
-                .set_file_name(format!("codeplug-{}.yaml", worker::stamp()))
-                .save_file(),
-        ) else {
+        if self.doc.is_none() {
             return;
-        };
-        let r = exchange::export_qdmr_file(&doc.cp, &p);
-        self.finish_export("Export qdmr codeplug", r);
+        }
+        let name = format!("codeplug-{}.yaml", worker::stamp());
+        self.pick(Choose::ExportQdmr, move |d| {
+            d.add_filter("qdmr codeplug", &["yaml"]).set_file_name(name).save_file().into_iter().collect()
+        });
     }
 
     fn import_csv_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
-            .add_filter("CSV tables", &["csv"])
-            .pick_files()
-        {
-            self.run_import("Import CSV tables", "CSV import", |cp| {
-                exchange::import_csv_files(cp, &p)
-            });
-        }
+        self.pick(Choose::ImportCsv, |d| d.add_filter("CSV tables", &["csv"]).pick_files().unwrap_or_default());
     }
 
     fn import_stock_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
-            .add_filter("Stock DM-32UV backup", &["zip", "bin"])
-            .pick_file()
-        {
-            self.run_import(
-                "Import stock DM-32UV codeplug",
-                "stock DM-32UV import",
-                |cp| exchange::import_stock_file(cp, &p),
-            );
-        }
+        self.pick(Choose::ImportStock, |d| {
+            d.add_filter("Stock DM-32UV backup", &["zip", "bin"]).pick_file().into_iter().collect()
+        });
     }
 
     fn export_csv_dialog(&mut self) {
-        let (Some(doc), Some(dir)) = (
-            &self.doc,
-            rfd::FileDialog::new()
-                .set_title("Choose a folder for the CSV files")
-                .pick_folder(),
-        ) else {
+        if self.doc.is_none() {
             return;
-        };
-        let r = exchange::export_csv_folder(&doc.cp, &dir);
-        self.finish_export("Export CSV tables", r);
+        }
+        self.pick(Choose::ExportCsv, |d| {
+            d.set_title("Choose a folder for the CSV files").pick_folder().into_iter().collect()
+        });
     }
 
     fn export_chirp_dialog(&mut self) {
-        let (Some(doc), Some(p)) = (
-            &self.doc,
-            rfd::FileDialog::new()
-                .add_filter("CHIRP CSV", &["csv"])
-                .set_file_name("channels-chirp.csv")
-                .save_file(),
-        ) else {
+        if self.doc.is_none() {
             return;
-        };
-        let r = exchange::export_chirp_file(&doc.cp, &p);
-        self.finish_export("Export CHIRP CSV", r);
+        }
+        self.pick(Choose::ExportChirp, |d| {
+            d.add_filter("CHIRP CSV", &["csv"]).set_file_name("channels-chirp.csv").save_file().into_iter().collect()
+        });
     }
 
     fn finish_export(&mut self, title: &str, r: Result<Vec<String>, String>) {
@@ -597,7 +622,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // egui leaves its root window node unnamed; a screen reader then announces an empty window
         ui.ctx().accesskit_node_builder(egui::accesskit_root_id(), |n| n.set_label("RadioFoundry CPS"));
+        self.ctx = Some(ui.ctx().clone());
         self.poll_read();
+        self.poll_chooser();
         if let Some(d) = &self.doc {
             let key = (self.doc_serial, d.generation);
             if key != self.problems_key {

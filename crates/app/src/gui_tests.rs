@@ -1024,6 +1024,36 @@ fn accept_invalid_crc_is_a_dmr_channel_setting() {
     assert!(channel(&h).accept_bad_crc);
 }
 
+// --- The file chooser runs on its own thread ---
+
+#[test]
+fn a_file_chooser_does_not_hold_the_window_and_its_answer_is_taken_when_it_comes() {
+    let mut h = harness();
+    let path = std::env::temp_dir().join(format!("rfcps-chooser-test-{}.bin", std::process::id()));
+    std::fs::write(&path, rfcps_core::Image::blank().bytes()).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    h.state_mut().chooser = Some((Choose::Open, rx));
+    // The chooser is open: the window keeps running, and a second click on Open does not start another chooser.
+    h.run();
+    h.get_all_by_label("Open image…").next().unwrap().click();
+    h.run();
+    assert!(h.state().doc.is_none());
+    assert!(h.state().chooser.is_some());
+    // The answer arrives: the file is opened.
+    tx.send(vec![path.clone()]).unwrap();
+    h.run();
+    assert!(h.state().chooser.is_none());
+    assert!(h.state().doc.as_ref().is_some_and(|d| d.from_file));
+    // Cancelled (no path): nothing changes.
+    let (tx, rx) = std::sync::mpsc::channel();
+    h.state_mut().chooser = Some((Choose::Open, rx));
+    tx.send(Vec::new()).unwrap();
+    h.run();
+    assert!(h.state().chooser.is_none());
+    assert!(h.state().doc.is_some());
+    let _ = std::fs::remove_file(path);
+}
+
 // --- DTMF contacts and APRS configurations ---
 
 /// The harness on the tab with this exact label (its name and its count): "APRS" alone would also match the channel
