@@ -477,7 +477,7 @@ fn channel_modes_encode_like_the_web_editor() {
     cp.channels[i3].tagged.as_mut().unwrap().params = Params::P25(P25Conv { squelch: 1, rx_nac: 0x123, tx_nac: 0x456 });
     modes::set_kind(&mut cp.channels[i5], modes::KIND_NXDN, Mode::Dmr, &[]);
     cp.channels[i5].tagged.as_mut().unwrap().params =
-        Params::Nxdn(NxdnConv { rate9600: false, squelch: 1, rx_ran: 5, tx_ran: 9 });
+        Params::Nxdn(NxdnConv { rate9600: false, squelch: 1, rx_ran: 5, tx_ran: 9, tx_key_id: None });
     cp.mode_settings.p25_unit_id = 3_100_001;
     cp.mode_settings.nxdn_unit_id = 4242;
     let one = cp.encode(&base);

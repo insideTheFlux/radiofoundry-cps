@@ -21,6 +21,8 @@ pub enum Value {
     Tag(String, Box<Value>),
     /// A list or map the writer puts in flow style (`{a: 1}`, `[a, b]`).
     Flow(Box<Value>),
+    /// A scalar the writer emits as given, such as `0x293` for a number best read in hex. It must read back as the value.
+    Raw(String),
 }
 
 impl Value {
@@ -866,6 +868,7 @@ fn inline(v: &Value) -> String {
     match v {
         Value::Tag(t, x) => format!("{t} {}", inline(x)).trim_end().to_string(),
         Value::Flow(x) => inline(x),
+        Value::Raw(t) => t.clone(),
         Value::List(l) => format!(
             "[{}]",
             l.iter().map(inline).collect::<Vec<_>>().join(", ")

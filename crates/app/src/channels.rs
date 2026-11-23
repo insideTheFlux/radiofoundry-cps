@@ -6,7 +6,7 @@
 //! (the layout of the web editor's channel form).
 
 use crate::theme;
-use crate::widgets::{checked_text, freq_edit, name_edit};
+use crate::widgets::{checked_text, freq_edit, name_edit, tx_freq_edit};
 use eframe::egui::{self, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
 use rfcps_core::fields::parse_tone;
@@ -176,10 +176,11 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                             let _ = listen;
                         });
                         row.col(|ui| {
-                            let (r, v) = freq_edit(
+                            let (r, v) = tx_freq_edit(
                                 ui,
                                 ui.scope_id().with(("tx_hz", number)),
                                 c.tx_hz,
+                                c.rx_hz,
                                 listen_band(c.rx_hz).is_none(),
                             );
                             let r = r.accessible_name(format!("TX MHz, channel {number}"));
@@ -370,10 +371,11 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             }
             ui.end_row();
             let l = ui.label("TX MHz");
-            let (r, v) = freq_edit(
+            let (r, v) = tx_freq_edit(
                 ui,
                 egui::Id::unique(("d_tx", number)),
                 c.tx_hz,
+                c.rx_hz,
                 listen.is_none() && own,
             );
             r.labelled_by(l.id);
@@ -611,6 +613,9 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 let l = ui.label("Force Direct Mode");
                 ui.checkbox(&mut c.dmo, "").labelled_by(l.id);
                 ui.end_row();
+                let l = ui.label("Accept Invalid CRC");
+                ui.checkbox(&mut c.accept_bad_crc, "").labelled_by(l.id);
+                ui.end_row();
             });
     }
 }
@@ -696,6 +701,7 @@ fn mode_group(ui: &mut Ui, c: &mut Channel, systems: &[System], choices: &Choice
         }
         Some(Params::Nxdn(mut p)) => {
             group(ui, "NXDN");
+            let mut system = c.tagged.as_ref().map_or(0xFF, |t| t.system);
             egui::Grid::new(("nxdn", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
                 let l = ui.label("Rate");
                 egui::ComboBox::from_id_salt(("nxdnrate", number))
@@ -723,13 +729,60 @@ fn mode_group(ui: &mut Ui, c: &mut Channel, systems: &[System], choices: &Choice
                 let l = ui.label("Channel Unit ID");
                 unit_field(ui, c, number).labelled_by(l.id);
                 ui.end_row();
+                // The system is optional; it supplies the traffic keys and a radio ID of its own.
+                let l = ui.label("System");
+                let shown = systems
+                    .iter()
+                    .find(|s| system != 0xFF && s.number == u16::from(system) + 1)
+                    .map_or_else(
+                        || if system == 0xFF { "none".to_string() } else { format!("#{} (missing)", u16::from(system) + 1) },
+                        |s| format!("{}  {}", s.number, s.name),
+                    );
+                egui::ComboBox::from_id_salt(("nxdnsys", number))
+                    .selected_text(shown)
+                    .width(220.0)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut system, 0xFF, "none");
+                        for s in systems.iter().filter(|s| s.type_id == rfcps_core::systems::SYSTEM_NXDN) {
+                            ui.selectable_value(&mut system, (s.number - 1) as u8, format!("{}  {}", s.number, s.name));
+                        }
+                    })
+                    .response
+                    .labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("Transmit key");
+                let mut ids: Vec<u16> = systems
+                    .iter()
+                    .find(|s| system != 0xFF && s.number == u16::from(system) + 1)
+                    .map(|s| s.traffic_keys.iter().map(|k| k.id).collect())
+                    .unwrap_or_default();
+                ids.sort_unstable();
+                let shown = match p.tx_key_id {
+                    None => "Clear".to_string(),
+                    Some(id) if ids.contains(&u16::from(id)) => format!("Key {id}"),
+                    Some(id) => format!("Key {id} (not in the system)"),
+                };
+                egui::ComboBox::from_id_salt(("nxdnkey", number))
+                    .selected_text(shown)
+                    .width(220.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut p.tx_key_id, None, "Clear");
+                        for id in &ids {
+                            ui.selectable_value(&mut p.tx_key_id, Some(*id as u8), format!("Key {id}"));
+                        }
+                    })
+                    .response
+                    .labelled_by(l.id);
+                ui.end_row();
             });
             ui.label(
-                RichText::new("A RAN is 0 to 63; 0 receives every RAN. The TX RAN follows the RX RAN (RAN 1 when that is 0) when it is the same. An empty unit ID uses the radio's.")
+                RichText::new("A RAN is 0 to 63; 0 receives every RAN. The TX RAN follows the RX RAN (RAN 1 when that is 0) when it is the same. An empty unit ID uses the radio's. A transmit key comes from the channel's system; firmware without NXDN system-key support may transmit in the clear.")
                     .size(13.0)
                     .color(muted),
             );
             if let Some(t) = &mut c.tagged {
+                t.system = system;
                 t.params = Params::Nxdn(p);
             }
         }
@@ -834,6 +887,9 @@ fn trunk_group(
         ui.end_row();
         let l = ui.label("No fallback on this channel");
         ui.checkbox(&mut no_fallback, "").labelled_by(l.id);
+        ui.end_row();
+        let l = ui.label("Accept Invalid CRC");
+        ui.checkbox(&mut c.accept_bad_crc, "").labelled_by(l.id);
         ui.end_row();
     });
     ui.label(

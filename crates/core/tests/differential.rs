@@ -22,6 +22,64 @@ fn sig(r: &Option<rfcps_core::kv::SigRecord>) -> Value {
     }
 }
 
+/// A system as the dump shows it (the web editor's `dump`).
+fn system_json(s: &rfcps_core::systems::System) -> Value {
+    let fields = match &s.fields {
+        SystemFields::P25Trunk(f) => json!({"wacn": f.wacn, "sysid": f.sysid, "ccNac": f.cc_nac, "skipEnc": f.skip_enc,
+            "planOnly": f.plan_only, "noReg": f.no_reg, "holdS": f.hold_s, "roamDbm": f.roam_dbm}),
+        SystemFields::T3(f) => json!({"model": f.model, "net": f.net, "category": if f.category_b {"b"} else {"a"},
+            "colorCode": f.color_code, "allCalls": f.all_calls, "emergencyAny": f.emergency_any, "followAll": f.follow_all, "learnSystem": f.learn_system,
+            "privateCalls": f.private_calls, "registerTalkgroups": f.register_talkgroups, "acceptAls": f.accept_als,
+            "acceptKill": f.accept_kill, "noRoaming": f.no_roaming, "acceptStun": f.accept_stun,
+            "ipGateway": f.ip_gateway, "fallbackHold": f.fallback_hold, "planBaseHz": f.plan_base_hz,
+            "planFirstLcn": f.plan_first_lcn, "planSep": f.plan_sep, "planTxLow": f.plan_tx_low,
+            "planNoLearn": f.plan_no_learn, "planSplitHz": f.plan_split_hz, "leaveDbm": f.leave_dbm,
+            "powerSave": f.power_save, "sites": f.sites}),
+        SystemFields::Nxdn => json!({}),
+        SystemFields::Unknown => Value::Null,
+    };
+    let entries: Vec<Value> = s
+        .entries
+        .iter()
+        .map(|e| {
+            let mut v = json!({"cls": e.cls, "group": e.group, "control": e.control, "flags": e.flags});
+            let o = v.as_object_mut().unwrap();
+            match &e.body {
+                EntryBody::P25Control { iden, chan_no, rx_hz, tx_hz } => {
+                    o.insert("chan".into(), json!((u16::from(*iden) << 12) | chan_no));
+                    o.insert("rxHz".into(), json!(rx_hz));
+                    o.insert("txHz".into(), json!(tx_hz));
+                    o.insert("iden".into(), json!(iden));
+                    o.insert("chanNo".into(), json!(chan_no));
+                }
+                EntryBody::P25Site { rfss, site } => {
+                    o.insert("rfss".into(), json!(rfss));
+                    o.insert("site".into(), json!(site));
+                }
+                EntryBody::P25Plan { base_hz, spacing_hz, tx_offset_hz, bw_hz, tdma, slots } => {
+                    o.insert("baseHz".into(), json!(base_hz));
+                    o.insert("spacingHz".into(), json!(spacing_hz));
+                    o.insert("txOffsetHz".into(), json!(tx_offset_hz));
+                    o.insert("bwHz".into(), json!(bw_hz));
+                    o.insert("tdma".into(), json!(tdma));
+                    o.insert("slots".into(), json!(slots));
+                }
+                EntryBody::T3Channel { lcn, rx_hz, tx_hz, cc } => {
+                    o.insert("chan".into(), json!(lcn));
+                    o.insert("rxHz".into(), json!(rx_hz));
+                    o.insert("txHz".into(), json!(tx_hz));
+                    o.insert("cc".into(), json!(cc));
+                }
+                EntryBody::Other => {}
+            }
+            v
+        })
+        .collect();
+    json!({"number": s.number, "type": s.type_id, "name": s.name, "sharing": s.sharing, "ownId": s.own_id, "tx": s.tx,
+        "needsKey": s.needs_key, "fields": fields, "entries": entries, "hasSecret": s.secret.is_some(),
+        "trafficKeys": s.traffic_keys.iter().map(|k| json!({"id": k.id, "seed": k.seed, "flags": k.flags, "slot": k.slot})).collect::<Vec<_>>()})
+}
+
 fn dump(cp: &Codeplug) -> Value {
     let g = &cp.general;
     let k = &g.keys;
@@ -33,7 +91,13 @@ fn dump(cp: &Codeplug) -> Value {
             let t = c.tagged.as_ref();
             let params = t.map(|t| match &t.params {
                 Params::P25(p) => json!({"squelch": p.squelch, "rxNac": p.rx_nac, "txNac": p.tx_nac}),
-                Params::Nxdn(p) => json!({"rate9600": p.rate9600, "squelch": p.squelch, "rxRan": p.rx_ran, "txRan": p.tx_ran}),
+                Params::Nxdn(p) => {
+                    let mut v = json!({"rate9600": p.rate9600, "squelch": p.squelch, "rxRan": p.rx_ran, "txRan": p.tx_ran});
+                    if let Some(id) = p.tx_key_id {
+                        v["txKeyId"] = json!(id);
+                    }
+                    v
+                }
                 Params::P25Trunk(p) => json!({"followAll": p.follow_all}),
                 Params::T3 => json!({}),
                 Params::Unknown => Value::Null,
@@ -54,64 +118,7 @@ fn dump(cp: &Codeplug) -> Value {
             })
         })
         .collect();
-    let systems: Vec<Value> = cp
-        .systems
-        .iter()
-        .map(|s| {
-            let fields = match &s.fields {
-                SystemFields::P25Trunk(f) => json!({"wacn": f.wacn, "sysid": f.sysid, "ccNac": f.cc_nac, "skipEnc": f.skip_enc,
-                    "planOnly": f.plan_only, "noReg": f.no_reg, "holdS": f.hold_s, "roamDbm": f.roam_dbm}),
-                SystemFields::T3(f) => json!({"model": f.model, "net": f.net, "category": if f.category_b {"b"} else {"a"},
-                    "colorCode": f.color_code, "allCalls": f.all_calls, "emergencyAny": f.emergency_any, "followAll": f.follow_all, "learnSystem": f.learn_system,
-                    "privateCalls": f.private_calls, "registerTalkgroups": f.register_talkgroups, "acceptAls": f.accept_als,
-                    "acceptKill": f.accept_kill, "noRoaming": f.no_roaming, "acceptStun": f.accept_stun,
-                    "ipGateway": f.ip_gateway, "fallbackHold": f.fallback_hold, "planBaseHz": f.plan_base_hz,
-                    "planFirstLcn": f.plan_first_lcn, "planSep": f.plan_sep, "planTxLow": f.plan_tx_low,
-                    "planNoLearn": f.plan_no_learn, "planSplitHz": f.plan_split_hz, "leaveDbm": f.leave_dbm,
-                    "powerSave": f.power_save, "sites": f.sites}),
-                SystemFields::Unknown => Value::Null,
-            };
-            let entries: Vec<Value> = s
-                .entries
-                .iter()
-                .map(|e| {
-                    let mut v = json!({"cls": e.cls, "group": e.group, "control": e.control, "flags": e.flags});
-                    let o = v.as_object_mut().unwrap();
-                    match &e.body {
-                        EntryBody::P25Control { iden, chan_no, rx_hz, tx_hz } => {
-                            o.insert("chan".into(), json!((u16::from(*iden) << 12) | chan_no));
-                            o.insert("rxHz".into(), json!(rx_hz));
-                            o.insert("txHz".into(), json!(tx_hz));
-                            o.insert("iden".into(), json!(iden));
-                            o.insert("chanNo".into(), json!(chan_no));
-                        }
-                        EntryBody::P25Site { rfss, site } => {
-                            o.insert("rfss".into(), json!(rfss));
-                            o.insert("site".into(), json!(site));
-                        }
-                        EntryBody::P25Plan { base_hz, spacing_hz, tx_offset_hz, bw_hz, tdma, slots } => {
-                            o.insert("baseHz".into(), json!(base_hz));
-                            o.insert("spacingHz".into(), json!(spacing_hz));
-                            o.insert("txOffsetHz".into(), json!(tx_offset_hz));
-                            o.insert("bwHz".into(), json!(bw_hz));
-                            o.insert("tdma".into(), json!(tdma));
-                            o.insert("slots".into(), json!(slots));
-                        }
-                        EntryBody::T3Channel { lcn, rx_hz, tx_hz, cc } => {
-                            o.insert("chan".into(), json!(lcn));
-                            o.insert("rxHz".into(), json!(rx_hz));
-                            o.insert("txHz".into(), json!(tx_hz));
-                            o.insert("cc".into(), json!(cc));
-                        }
-                        EntryBody::Other => {}
-                    }
-                    v
-                })
-                .collect();
-            json!({"number": s.number, "type": s.type_id, "name": s.name, "sharing": s.sharing, "ownId": s.own_id, "tx": s.tx,
-                "needsKey": s.needs_key, "fields": fields, "entries": entries, "hasSecret": s.secret.is_some()})
-        })
-        .collect();
+    let systems: Vec<Value> = cp.systems.iter().map(system_json).collect();
     json!({
         "general": {"radioName": g.radio_name, "dmrId": g.dmr_id, "groupHang": g.group_hang, "privateHang": g.private_hang,
             "bootLine1": g.boot_line1, "bootLine2": g.boot_line2, "arsServer": k.ars_server, "ipGateway": k.ip_gateway,
@@ -215,11 +222,13 @@ fn random_edits_agree_with_the_web_editor() {
         let img = Image::from_bytes(&read("img.bin"));
         let cp = Codeplug::decode(&img);
 
-        // 1. decoding and writing back changes nothing
+        // 1. decoding and writing back does what the web editor's does (it changes nothing, except that a channel
+        // in a listen band is read as RX only with TX on RX, so the record is written so)
         checks += 1;
         let back = cp.encode(&img);
-        if back.bytes() != img.bytes() {
-            fail(case.clone(), "re-encode", format!("{} [{ops}]", first_diff_byte(back.bytes(), img.bytes())));
+        let want_back = std::fs::read(format!("{dir}/{case}/reenc.bin")).unwrap_or_else(|_| img.bytes().to_vec());
+        if back.bytes() != want_back.as_slice() {
+            fail(case.clone(), "re-encode", format!("{} [{ops}]", first_diff_byte(back.bytes(), &want_back)));
         }
         // 2. what a reader decodes
         checks += 1;
@@ -243,6 +252,29 @@ fn random_edits_agree_with_the_web_editor() {
         let (got, w) = (rfcps_core::qdmr::export_qdmr(&cp).0, text("qdmr.yaml"));
         if got != w {
             fail(case.clone(), "qdmr export", first_diff_line(&got, &w));
+        }
+        // the qdmr file imported into a fresh read of the image: what it decodes to and exports as
+        let rt = text("qdmr_rt.yaml");
+        if !rt.starts_with("ERR ") {
+            checks += 1;
+            let mut cp3 = Codeplug::decode(&img);
+            match rfcps_core::qdmr::import_qdmr(&mut cp3, &text("qdmr.yaml")) {
+                Err(e) => fail(case.clone(), "qdmr import", e),
+                Ok(_) => {
+                    let (mut d3, want3) = (dump(&cp3), serde_json::from_str::<Value>(&text("qdmr_rt_dump.json")).unwrap());
+                    let mut out = Vec::new();
+                    diff(&d3, &want3, "", &mut out);
+                    if !out.is_empty() {
+                        fail(case.clone(), "qdmr import decode", out.join("; "));
+                    }
+                    d3 = Value::Null;
+                    let _ = d3;
+                    let got = rfcps_core::qdmr::export_qdmr(&cp3).0;
+                    if got != rt {
+                        fail(case.clone(), "qdmr import export", first_diff_line(&got, &rt));
+                    }
+                }
+            }
         }
         checks += 1;
         let (got, w) = (rfcps_core::chirp::export_chirp(&cp).0, text("chirp.csv"));
@@ -301,4 +333,38 @@ fn random_edits_agree_with_the_web_editor() {
         eprintln!("  {f}");
     }
     assert!(fails.is_empty(), "{} mismatches against the web editor", fails.len());
+}
+
+#[test]
+fn the_recommended_ham_systems_match_the_web_editor() {
+    let Ok(dir) = std::env::var("RFCPS_FUZZ_DIR") else {
+        eprintln!("RFCPS_FUZZ_DIR not set: skipped");
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(format!("{dir}/ham.json")) else {
+        eprintln!("no ham.json: skipped");
+        return;
+    };
+    let cases: Vec<Value> = serde_json::from_str(&text).unwrap();
+    assert!(!cases.is_empty());
+    for c in cases {
+        let a = &c["args"];
+        let got = rfcps_core::systems::new_ham_system(
+            a["type"].as_u64().unwrap() as u8,
+            a["name"].as_str().unwrap(),
+            a["rxHz"].as_u64().unwrap() as u32,
+            a["txHz"].as_u64().unwrap() as u32,
+            a["site"].as_u64().unwrap() as u16,
+        )
+        .expect("a ham system");
+        let mut got = system_json(&got);
+        let mut want = c["system"].clone();
+        for k in ["number", "hasSecret", "trafficKeys"] {
+            got.as_object_mut().unwrap().remove(k);
+            want.as_object_mut().unwrap().remove(k);
+        }
+        let mut out = Vec::new();
+        diff(&got, &want, "", &mut out);
+        assert!(out.is_empty(), "{a}: {out:?}");
+    }
 }

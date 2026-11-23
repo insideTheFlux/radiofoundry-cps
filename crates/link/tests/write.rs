@@ -313,7 +313,7 @@ fn a_p25_channel_writes_its_record_and_its_tag() {
 fn an_nxdn_tag_follows_a_rename_and_is_removed_with_its_channel() {
     let (mut radio, base, mut cp) = setup();
     modes::set_kind(&mut cp.channels[0], modes::KIND_NXDN, Mode::Dmr, &[]);
-    cp.channels[0].tagged.as_mut().unwrap().params = Params::Nxdn(NxdnConv { rate9600: false, squelch: 0, rx_ran: 5, tx_ran: 5 });
+    cp.channels[0].tagged.as_mut().unwrap().params = Params::Nxdn(NxdnConv { rate9600: false, squelch: 0, rx_ran: 5, tx_ran: 5, tx_key_id: None });
     let one = cp.encode(&base);
     radio.write_image(&base, &one, &mut |_, _| {}).unwrap();
     assert_eq!(radio.read_image(&mut |_, _| {}).unwrap().bytes(), one.bytes());
@@ -334,6 +334,55 @@ fn an_nxdn_tag_follows_a_rename_and_is_removed_with_its_channel() {
     radio.write_image(&two, &three, &mut |_, _| {}).unwrap();
     let area = rfcps_core::kv::decode_area(fake(&mut radio).image());
     assert!(area.entries.iter().all(|e| !(0x0400..0x0800).contains(&e.key)), "{:?}", area.entries);
+}
+
+#[test]
+fn an_nxdn_system_with_scrambler_keys_writes_and_a_deleted_key_leaves_the_area() {
+    use rfcps_core::systems::{self as sys, System, TrafficKey};
+    let (mut radio, base, mut cp) = setup();
+    let mut s = System::new(sys::SYSTEM_NXDN, "Net");
+    s.traffic_keys = vec![
+        TrafficKey { slot: None, id: 5, seed: 99, flags: 0 },
+        TrafficKey { slot: None, id: 9, seed: 31000, flags: 0 },
+    ];
+    cp.systems.push(s);
+    modes::set_kind(&mut cp.channels[0], modes::KIND_NXDN, Mode::Dmr, &cp.systems.clone());
+    {
+        let t = cp.channels[0].tagged.as_mut().unwrap();
+        t.system = 0;
+        t.params = Params::Nxdn(NxdnConv { tx_key_id: Some(9), ..NxdnConv::default() });
+    }
+    let one = cp.encode(&base);
+    radio.write_image(&base, &one, &mut |_, _| {}).unwrap();
+    assert!(radio.verify(&one).unwrap().is_empty());
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert_eq!(now.systems.len(), 1);
+    let keys: Vec<(u16, u16)> = now.systems[0].traffic_keys.iter().map(|k| (k.id, k.seed)).collect();
+    assert_eq!(keys, vec![(5, 99), (9, 31000)]);
+    match &now.channels[0].tagged.as_ref().unwrap().params {
+        Params::Nxdn(p) => assert_eq!(p.tx_key_id, Some(9)),
+        other => panic!("{other:?}"),
+    }
+
+    // A key taken out goes; the other keeps its slot.
+    let mut cp = Codeplug::decode(&one);
+    cp.systems[0].traffic_keys.remove(0);
+    let two = cp.encode(&one);
+    radio.write_image(&one, &two, &mut |_, _| {}).unwrap();
+    let area = rfcps_core::kv::decode_area(fake(&mut radio).image());
+    let slots: Vec<u16> = area.entries.iter().map(|e| e.key).filter(|k| (0x1900..0x1D00).contains(k)).collect();
+    assert_eq!(slots.len(), 1, "{slots:?}");
+    // Deleted with its system: no traffic key stays.
+    let mut cp = Codeplug::decode(&two);
+    cp.remove_system(1);
+    let three = cp.encode(&two);
+    radio.write_image(&two, &three, &mut |_, _| {}).unwrap();
+    let area = rfcps_core::kv::decode_area(fake(&mut radio).image());
+    assert!(area.entries.iter().all(|e| !(0x1900..0x1D00).contains(&e.key)), "{:?}", area.entries);
+    // The channel stays NXDN, on no system.
+    let now = Codeplug::decode(&Image::from_bytes(fake(&mut radio).image()));
+    assert_eq!(now.channels[0].kind(), modes::KIND_NXDN);
+    assert_eq!(now.channels[0].tagged.as_ref().unwrap().system, 0xFF);
 }
 
 #[test]

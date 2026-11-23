@@ -12,7 +12,7 @@ the specs in its `docs/spec/`. First radio: the DM-32UV.
 |---|---|
 | Codeplug image: channels, VFOs, zones, contacts, RX group lists, general settings, the settings area | done, matches the web editor |
 | DTMF contacts, APRS configurations | done, matches the web editor |
-| P25 and NXDN conventional channels, P25 trunked systems, DMR Tier III systems | done, matches the web editor |
+| P25 and NXDN conventional channels, P25 trunked systems, DMR Tier III systems, NXDN conventional systems with scrambler keys, the recommended ham systems, Accept Invalid CRC, Chinese names | done, matches the web editor as of its `main` of 2026-11-22 (`c2551ffe`) |
 | Read and write over the programming cable (the fast codeplug protocol) | done: only changed blocks, a backup first, a refusal if the radio changed, a read-back check |
 | Import and export: stock DM-32UV backup, qdmr YAML, CHIRP CSV, CSV tables | done, matches the web editor |
 | DMR ID database, formats N and C, built from a RadioID `user.csv` (opened, downloaded or fetched by region) | done, matches the web editor; a compact database goes to a radio that reads only N as N |
@@ -30,7 +30,7 @@ limit: use the keyboard; a mouse click on a drop-down is not announced. One earl
 again and was not explained. Orca 50.3 on Ubuntu GNOME: names verified through AT-SPI and tried
 by hand; drop-downs, menus, dialogs and check boxes work, and the focus stays on a check box through repeated toggles.
 
-Not edited, as in the web editor: targets, target lists and traffic keys (kept byte for byte), DTMF signaling.
+Not edited, as in the web editor: targets, target lists and traffic keys other than NXDN scrambler keys (kept byte for byte), DTMF signaling.
 Not planned: flashing firmware (it can brick a radio), Android and iOS, macOS.
 
 ## Layout

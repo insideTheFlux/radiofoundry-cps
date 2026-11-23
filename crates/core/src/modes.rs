@@ -14,6 +14,7 @@ use crate::kv::{self, Entry};
 use crate::systems::{self, EntryBody, System};
 use crate::records::{channel_addr, Channel, Mode, CH_SIZE, MAX_CHANNELS};
 use std::collections::HashMap;
+use crate::systems::SCRAMBLER;
 
 pub const TAG_KEY: u16 = 0x0400;
 pub const SETTING_KEY: u16 = 0x0A00;
@@ -234,11 +235,13 @@ pub struct NxdnConv {
     pub squelch: u8,
     pub rx_ran: u8,
     pub tx_ran: u8,
+    /// The traffic key the channel transmits with (the five-byte form), from its system's keys; `None` sends clear.
+    pub tx_key_id: Option<u8>,
 }
 
 impl Default for NxdnConv {
     fn default() -> Self {
-        Self { rate9600: true, squelch: 0, rx_ran: 0, tx_ran: 1 }
+        Self { rate9600: true, squelch: 0, rx_ran: 0, tx_ran: 1, tx_key_id: None }
     }
 }
 
@@ -254,15 +257,22 @@ pub fn decode_nxdn(b: &[u8]) -> NxdnConv {
         squelch: u8::from(f & 3 == 1),
         rx_ran: rx,
         tx_ran: if t & 0xC0 == TX_RAN_SET { t & RAN_MAX } else { tx_ran_default(rx) },
+        tx_key_id: (b.len() >= 5 && u8_at(b, 3) == SCRAMBLER).then(|| u8_at(b, 4)),
     }
 }
 
 pub fn encode_nxdn(p: &NxdnConv, prev: Option<&[u8]>) -> Vec<u8> {
-    let mut v = grow(prev, 3);
+    let mut v = grow(prev, if p.tx_key_id.is_some() { 5 } else { 3 });
     let rx = if p.rx_ran <= RAN_MAX { p.rx_ran } else { 0 };
     v[0] = (v[0] & !7) | u8::from(p.squelch == 1) | if p.rate9600 { 0 } else { RATE_4800 };
     v[1] = rx;
     v[2] = if p.tx_ran == tx_ran_default(rx) { 0 } else { TX_RAN_SET | (p.tx_ran & RAN_MAX) };
+    if let Some(id) = p.tx_key_id {
+        v[3] = SCRAMBLER;
+        v[4] = id;
+    } else if v.len() >= 5 && v[3] == SCRAMBLER {
+        v[3..5].fill(0);
+    }
     v
 }
 
@@ -677,6 +687,9 @@ pub fn encode_modes(
 ) -> bool {
     let Some(entries) = kv::entries_for_write(b) else { return true };
     let out = mode_entries(m, &entries, base_names);
+    if out.iter().any(|e| e.key == systems::OVERFLOW_KEY) {
+        return false;
+    }
     kv::put_entries(b, &entries, &out)
 }
 
@@ -751,7 +764,7 @@ mod tests {
         // A zeroed block: 9600 bit/s, RAN squelch, every RAN received and RAN 1 sent.
         assert_eq!(decode_nxdn(&[]), NxdnConv::default());
         assert_eq!(decode_nxdn(&[0, 0, 0]), NxdnConv::default());
-        let p = NxdnConv { rate9600: false, squelch: 1, rx_ran: 5, tx_ran: 9 };
+        let p = NxdnConv { rate9600: false, squelch: 1, rx_ran: 5, tx_ran: 9, tx_key_id: None };
         let v = encode_nxdn(&p, None);
         assert_eq!(v, vec![0x05, 5, 0x89]);
         assert_eq!(decode_nxdn(&v), p);

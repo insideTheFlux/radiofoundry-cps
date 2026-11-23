@@ -13,6 +13,20 @@ pub fn freq_edit(ui: &mut Ui, id: egui::Id, hz: u64, enabled: bool) -> (Response
         .inner
 }
 
+/// A channel's TX frequency field. A TX frequency typed in a receive-only band (air band, broadcast FM) is refused
+/// while the RX is outside one, as in the web editor: the radio never transmits there, so the channel keeps its TX
+/// frequency. TX on an RX in such a band (TX follows RX there) and a TX left as it is are taken.
+pub fn tx_freq_edit(ui: &mut Ui, id: egui::Id, hz: u64, rx_hz: u64, enabled: bool) -> (Response, Option<u64>) {
+    use rfcps_core::freqs::listen_band;
+    let shown = format!("{:.5}", hz as f64 / 1e6);
+    ui.add_enabled_ui(enabled, |ui| {
+        checked_text(ui, id, shown, 86.0, |s| {
+            parse_mhz(s).filter(|h| !(listen_band(*h).is_some() && listen_band(rx_hz).is_none() && *h != hz))
+        })
+    })
+    .inner
+}
+
 /// "146.52" or "146,52" MHz as Hz on a 10 Hz grid, or `None` if it is no frequency in 30 to 1000 MHz.
 pub fn parse_mhz(text: &str) -> Option<u64> {
     let mhz: f64 = text.trim().replace(',', ".").parse().ok()?;
@@ -52,13 +66,16 @@ pub fn checked_text<T: Clone>(
     (r, out)
 }
 
-/// A name field of at most `max` characters.
+/// A name field of at most `max` bytes of the field: a character the radio draws is one byte, a Chinese one three
+/// (`fields::name_bytes`). Text that is too long is cut at a whole character.
 pub fn name_edit(ui: &mut Ui, name: &mut String, max: usize, width: f32) -> Response {
-    ui.add(
-        egui::TextEdit::singleline(name)
-            .char_limit(max)
-            .desired_width(width),
-    )
+    let r = ui.add(egui::TextEdit::singleline(name).desired_width(width));
+    if r.changed() {
+        while rfcps_core::fields::name_bytes(name) > max {
+            name.pop();
+        }
+    }
+    r
 }
 
 #[cfg(test)]

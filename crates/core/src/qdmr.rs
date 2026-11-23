@@ -161,6 +161,8 @@ pub enum Note {
     Sfr,
     ToneBurst,
     PowerLevel,
+    ModeKeys,
+    ModeUnknown,
 }
 
 impl Note {
@@ -195,13 +197,15 @@ impl Note {
             Note::Sfr => format!("{n} channel(s) have SFR settings, which a qdmr file can't hold."),
             Note::ToneBurst => format!("{n} channel(s) have a 1750 Hz tone burst, which a qdmr file can't hold."),
             Note::PowerLevel => format!("{n} channel(s) have a power level qdmr has no name for; they were written as the radio's default."),
+            Note::ModeKeys => format!("{n} system(s) have keys; keys are never written to a file."),
+            Note::ModeUnknown => format!("{n} system, entry or channel mode this editor does not know was left out of the radioFoundry block."),
         }
     }
 }
 
-type Notes = Vec<(Note, usize)>;
+pub(crate) type Notes = Vec<(Note, usize)>;
 
-fn add(notes: &mut Notes, n: Note, by: usize) {
+pub(crate) fn add(notes: &mut Notes, n: Note, by: usize) {
     match notes.iter_mut().find(|(k, _)| *k == n) {
         Some((_, c)) => *c += by,
         None => notes.push((n, by)),
@@ -739,6 +743,7 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
         }
     };
     let mut channels: Vec<Channel> = Vec::new();
+    let mut chan_blocks: Vec<Option<Value>> = Vec::new();
     let mut channel_by_id: Vec<(String, u16)> = Vec::new();
     let mut channel_tx: Vec<(String, u64)> = Vec::new();
     for x in list("channels") {
@@ -848,6 +853,7 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
         }
         channel_by_id.push((text(v.get("id")), c.number));
         channel_tx.push((text(v.get("id")), c.tx_hz));
+        chan_blocks.push(v.get("radioFoundry").filter(|b| b.is_map()).cloned());
         channels.push(c);
     }
     // An APRS configuration's frequency is its revert channel's.
@@ -972,6 +978,15 @@ pub fn import_qdmr(cp: &mut Codeplug, yaml: &str) -> Result<Report, String> {
     cp.dtmf_contacts = dtmf_contacts;
     cp.aprs = aprs;
     cp.zones = zones;
+    // the radioFoundry block: systems and channel modes, once every channel has its number
+    let blocks: Vec<(usize, Option<&Value>)> = chan_blocks.iter().enumerate().map(|(i, b)| (i, b.as_ref())).collect();
+    crate::qdmr_modes::import_modes(
+        cp,
+        doc.get("radioFoundry"),
+        &blocks,
+        &|id| channel_by_id.iter().rev().find(|(k, _)| k == id).map(|(_, n)| *n),
+        &mut notes,
+    );
     // the VFOs keep their frequencies; references into the old tables can't stay
     for v in cp.vfo.iter_mut().flatten() {
         v.contact = 0;
@@ -1150,6 +1165,7 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
         Some(Value::str(format!("aprs{}", i + 1)))
     };
 
+    let modes = crate::qdmr_modes::export_modes(cp, &|n| chan_ref(n), &mut notes);
     let channels: Vec<Value> = cp
         .channels
         .iter()
@@ -1238,6 +1254,9 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
                 }
                 common.push(("extended", map(vec![("talkaround", Value::Bool(c.dmo))])));
                 common.push(("power", power));
+                if let Some(rf) = modes.channel(c, &|n| chan_ref(n), &mut notes) {
+                    common.push(("radioFoundry", rf));
+                }
                 map(vec![("dmr", map(common))])
             } else {
                 common.push((
@@ -1261,6 +1280,9 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
                     common.push(("aprs", v));
                 }
                 common.push(("power", power));
+                if let Some(rf) = modes.channel(c, &|n| chan_ref(n), &mut notes) {
+                    common.push(("radioFoundry", rf));
+                }
                 map(vec![("fm", map(common))])
             }
         })
@@ -1382,7 +1404,7 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
         settings.push(("dmr", map(dmr_set)));
     }
 
-    let doc = map(vec![
+    let mut top = vec![
         ("version", Value::str(QDMR_VERSION)),
         ("settings", map(settings)),
         ("radioIDs", Value::List(radio_ids)),
@@ -1391,7 +1413,11 @@ pub fn export_qdmr(cp: &Codeplug) -> (String, Vec<(Note, usize)>) {
         ("channels", Value::List(channels)),
         ("zones", Value::List(zones)),
         ("positioning", Value::List(positioning)),
-    ]);
+    ];
+    if let Some(rf) = modes.top.clone() {
+        top.push(("radioFoundry", rf));
+    }
+    let doc = map(top);
     (format!("---\n{}...\n", stringify(&doc)), notes)
 }
 

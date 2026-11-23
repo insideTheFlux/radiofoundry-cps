@@ -9,8 +9,8 @@ use crate::theme;
 use crate::widgets::{checked_text, name_edit, parse_mhz};
 use eframe::egui::{self, RichText, Ui};
 use rfcps_core::systems::{
-    self as sys, EntryBody, SysEntry, System, SystemFields, T3Key, T3System, MAX_ENTRIES, MAX_SYSTEMS, SYSTEM_P25_TRUNK,
-    SYSTEM_T3,
+    self as sys, EntryBody, SysEntry, System, SystemFields, T3Key, T3System, TrafficKey, MAX_ENTRIES, MAX_SYSTEMS,
+    SYSTEM_NXDN, SYSTEM_P25_TRUNK, SYSTEM_T3,
 };
 use rfcps_core::Codeplug;
 
@@ -36,7 +36,11 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
         ui.vertical(|ui| {
             ui.set_width(230.0);
             let n_entries: usize = cp.systems.iter().map(|s| s.entries.len()).sum();
-            for (label, type_id) in [("Add P25 trunked system", SYSTEM_P25_TRUNK), ("Add DMR Tier III system", SYSTEM_T3)] {
+            for (label, type_id) in [
+                ("Add P25 trunked system", SYSTEM_P25_TRUNK),
+                ("Add DMR Tier III system", SYSTEM_T3),
+                ("Add NXDN conventional system", SYSTEM_NXDN),
+            ] {
                 if ui.add_enabled(cp.systems.len() < MAX_SYSTEMS, egui::Button::new(label)).clicked() {
                     let mut s = System::new(type_id, &format!("System {}", cp.systems.len() + 1));
                     s.name.truncate(16);
@@ -45,6 +49,12 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
                     *selected = cp.systems.last().map(|s| s.number);
                 }
             }
+            for (label, type_id) in [("Recommended ham P25 system…", SYSTEM_P25_TRUNK), ("Recommended ham Tier III system…", SYSTEM_T3)] {
+                if ui.add_enabled(cp.systems.len() < MAX_SYSTEMS, egui::Button::new(label)).clicked() {
+                    ui.data_mut(|d| d.insert_temp(egui::Id::unique("ham_draft"), HamDraft::new(type_id)));
+                }
+            }
+            ham_dialog(ui, cp, selected);
             ui.label(format!("{} systems, {n_entries} of {MAX_ENTRIES} entries", cp.systems.len()));
             ui.separator();
             egui::ScrollArea::vertical().id_salt("system_list").show(ui, |ui| {
@@ -139,6 +149,143 @@ fn opt_byte(ui: &mut Ui, id: egui::Id, value: &mut Option<u8>, max: u8) -> egui:
     r
 }
 
+/// The scrambler keys of an NXDN conventional system (nxdn-codeplug.md 3): a key ID 0 to 63 and a seed 1 to 32767. The
+/// seeds are shown only when asked, as secrets are.
+fn traffic_keys(ui: &mut Ui, s: &mut System, number: u16) {
+    let muted = theme::palette(ui).muted;
+    group(ui, "Traffic keys");
+    let show_id = egui::Id::unique(("sys_show_seeds", number));
+    let mut show = ui.data(|d| d.get_temp::<bool>(show_id)).unwrap_or(false);
+    ui.checkbox(&mut show, "Show scrambler seeds");
+    ui.data_mut(|d| d.insert_temp(show_id, show));
+    let mut remove = None;
+    if !s.traffic_keys.is_empty() {
+        egui::Grid::new(("sys_keys", number)).num_columns(3).spacing([14.0, 9.0]).show(ui, |ui| {
+            ui.label("Key ID");
+            ui.label("Scrambler seed");
+            ui.label("");
+            ui.end_row();
+            for (i, k) in s.traffic_keys.iter_mut().enumerate() {
+                let n = i + 1;
+                num_field(ui, egui::Id::unique(("key_id", number, i)), &mut k.id, u64::from(sys::KEY_ID_MAX), 70.0)
+                    .accessible_name(format!("Key ID, key {n}"));
+                if show {
+                    let id = egui::Id::unique(("key_seed", number, i));
+                    let (r, v) = checked_text(ui, id, k.seed.to_string(), 90.0, |t| {
+                        t.trim().parse::<u16>().ok().filter(|v| (1..=sys::SEED_MAX).contains(v))
+                    });
+                    r.accessible_name(format!("Scrambler seed, key {n}"));
+                    if let Some(v) = v {
+                        k.seed = v;
+                    }
+                } else {
+                    ui.label("Set");
+                }
+                if ui.button("Remove").clicked() {
+                    remove = Some(i);
+                }
+                ui.end_row();
+            }
+        });
+    }
+    if let Some(i) = remove {
+        s.traffic_keys.remove(i);
+    }
+    let mut dup: Vec<u16> = Vec::new();
+    for (i, k) in s.traffic_keys.iter().enumerate() {
+        if s.traffic_keys[..i].iter().any(|o| o.id == k.id) && !dup.contains(&k.id) {
+            dup.push(k.id);
+        }
+    }
+    for id in dup {
+        ui.label(RichText::new(format!("Key ID {id} is already used in this system.")).color(egui::Color32::from_rgb(200, 60, 60)));
+    }
+    let free = (0..=sys::KEY_ID_MAX).find(|id| !s.traffic_keys.iter().any(|k| k.id == *id));
+    if ui.add_enabled(free.is_some() && s.traffic_keys.len() < 64, egui::Button::new("Add key")).clicked() {
+        s.traffic_keys.push(TrafficKey { slot: None, id: free.unwrap_or(0), seed: 1, flags: 0 });
+    }
+    ui.label(
+        RichText::new("A channel picks the key it transmits with from this list. The keys never leave the radio's settings area except in a saved image, which asks first.")
+            .size(13.0)
+            .color(muted),
+    );
+}
+
+/// What the recommended ham system dialog holds while it is open.
+#[derive(Clone)]
+struct HamDraft {
+    type_id: u8,
+    name: String,
+    rx: String,
+    tx: String,
+    site: String,
+}
+
+impl HamDraft {
+    fn new(type_id: u8) -> Self {
+        Self { type_id, name: String::new(), rx: String::new(), tx: String::new(), site: "0".into() }
+    }
+}
+
+/// The recommended ham system (ham-trunking.md): its name, the control channel of the site the user uses and, for Tier
+/// III, the site's number. The system is added with everything else set as recommended, ready to check.
+fn ham_dialog(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
+    let id = egui::Id::unique("ham_draft");
+    let Some(mut d) = ui.data(|x| x.get_temp::<HamDraft>(id)) else { return };
+    let t3 = d.type_id == SYSTEM_T3;
+    let title = if t3 { "Recommended ham Tier III system" } else { "Recommended ham P25 system" };
+    let mut open = true;
+    let mut done = false;
+    egui::Window::new(title).open(&mut open).collapsible(false).resizable(false).show(ui.ctx(), |ui| {
+        ui.label("RadioFoundry recommends one identity and set of options for every ham system of this type, so a radio set up once works on any site. Enter the control channel of the site you use; the system is added with every setting shown, to check.");
+        egui::Grid::new("ham_form").num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+            let l = ui.label("Name for the new system");
+            ui.add(egui::TextEdit::singleline(&mut d.name).hint_text(if t3 { "Ham Tier III" } else { "Ham P25" }).desired_width(200.0))
+                .labelled_by(l.id);
+            ui.end_row();
+            let l = ui.label("Control channel RX (MHz)");
+            ui.add(egui::TextEdit::singleline(&mut d.rx).desired_width(120.0)).labelled_by(l.id);
+            ui.end_row();
+            let l = ui.label("Control channel TX (MHz, blank: as RX)");
+            ui.add(egui::TextEdit::singleline(&mut d.tx).desired_width(120.0)).labelled_by(l.id);
+            ui.end_row();
+            if t3 {
+                let l = ui.label("Site number (0 to 1022)");
+                ui.add(egui::TextEdit::singleline(&mut d.site).desired_width(80.0)).labelled_by(l.id);
+                ui.end_row();
+            }
+        });
+        let rx = parse_mhz(&d.rx).and_then(|h| u32::try_from(h).ok());
+        let tx = if d.tx.trim().is_empty() { Some(0) } else { parse_mhz(&d.tx).and_then(|h| u32::try_from(h).ok()) };
+        let site = if t3 { d.site.trim().parse::<u16>().ok().filter(|s| *s <= sys::HAM_T3_SITE_MAX) } else { Some(0) };
+        let name_ok = d.name.chars().count() <= 16;
+        let ok = rx.is_some() && tx.is_some() && site.is_some() && name_ok;
+        if !ok {
+            ui.label(RichText::new("Enter the control channel's RX frequency in MHz, a TX frequency or none, and for Tier III a site number from 0 to 1022; a name is at most 16 characters.").size(13.0));
+        }
+        ui.horizontal(|ui| {
+            if ui.add_enabled(ok, egui::Button::new("Add system")).clicked() {
+                if let (Some(rx), Some(tx), Some(site)) = (rx, tx, site) {
+                    if let Some(s) = sys::new_ham_system(d.type_id, d.name.trim(), rx, tx, site) {
+                        cp.systems.push(s);
+                        sys::number_systems(&mut cp.systems);
+                        *selected = cp.systems.last().map(|s| s.number);
+                    }
+                }
+                done = true;
+            }
+            if ui.button("Cancel").clicked() {
+                done = true;
+            }
+        });
+    });
+    if done || !open {
+        ui.data_mut(|x| x.remove::<HamDraft>(id));
+    } else {
+        ui.data_mut(|x| x.insert_temp(id, d));
+    }
+}
+
 fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>) {
     let muted = theme::palette(ui).muted;
     let on_it = cp
@@ -158,13 +305,14 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         ui.label(match s.type_id {
             SYSTEM_P25_TRUNK => "P25 trunked".to_string(),
             SYSTEM_T3 => "DMR Tier III".to_string(),
+            SYSTEM_NXDN => "NXDN conventional".to_string(),
             t => format!("Type {t}"),
         });
         ui.end_row();
         let l = ui.label("Transmit side");
         let text = match (s.tx, matches!(&s.fields, SystemFields::P25Trunk(f) if f.no_reg)) {
             (false, _) => "Listen only",
-            (true, _) if s.type_id == SYSTEM_T3 => "Transmit",
+            (true, _) if matches!(s.type_id, SYSTEM_T3 | SYSTEM_NXDN) => "Transmit",
             (true, false) => "Transmit and register",
             (true, true) => "Transmit without registering",
         };
@@ -174,7 +322,11 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
             .width(240.0)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut choice, 1, "Listen only");
-                ui.selectable_value(&mut choice, 2, if s.type_id == SYSTEM_T3 { "Transmit" } else { "Transmit and register" });
+                ui.selectable_value(
+                    &mut choice,
+                    2,
+                    if matches!(s.type_id, SYSTEM_T3 | SYSTEM_NXDN) { "Transmit" } else { "Transmit and register" },
+                );
                 if s.type_id == SYSTEM_P25_TRUNK {
                     ui.selectable_value(&mut choice, 3, "Transmit without registering");
                 }
@@ -196,7 +348,8 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
             if t.is_empty() {
                 Some(0u32)
             } else {
-                t.parse::<u32>().ok().filter(|v| (1..=0xFF_FFFE).contains(v))
+                let max = if s.type_id == SYSTEM_NXDN { rfcps_core::modes::NXDN_UNIT_MAX } else { 0xFF_FFFE };
+                t.parse::<u32>().ok().filter(|v| (1..=max).contains(v))
             }
         });
         r.labelled_by(l.id);
@@ -258,6 +411,10 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         t3_channels(ui, s, number);
     }
 
+    if s.type_id == SYSTEM_NXDN {
+        traffic_keys(ui, s, number);
+    }
+
     group(ui, "Secret");
     if s.type_id == SYSTEM_T3 {
         let l = ui.label("Authenticates (needs its key)");
@@ -273,7 +430,14 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
             s.secret = None;
         }
     } else {
-        ui.label(RichText::new("No secret. P25 trunked systems don't use one yet.").color(muted));
+        ui.label(
+            RichText::new(if s.type_id == SYSTEM_NXDN {
+                "No secret. The scrambler keys are the traffic keys above."
+            } else {
+                "No secret. P25 trunked systems don't use one yet."
+            })
+            .color(muted),
+        );
     }
 
     group(ui, "Delete");

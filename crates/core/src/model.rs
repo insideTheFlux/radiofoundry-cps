@@ -169,6 +169,13 @@ impl Codeplug {
         let systems = self.systems.clone();
         for c in &mut self.channels {
             if c.tagged.as_ref().is_some_and(|t| t.system != 0xFF && u16::from(t.system) + 1 == number) {
+                // A kind whose system is optional (NXDN conventional) stays what it is, on no system.
+                if c.kind() == crate::modes::KIND_NXDN {
+                    if let Some(t) = &mut c.tagged {
+                        t.system = 0xFF;
+                    }
+                    continue;
+                }
                 crate::modes::set_kind(c, 0, crate::records::Mode::Dmr, &systems);
                 c.rx_only = true;
             }

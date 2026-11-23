@@ -380,16 +380,28 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
         let want = match t.kind {
             crate::modes::KIND_P25_TRUNK => Some(systems::SYSTEM_P25_TRUNK),
             crate::modes::KIND_T3 => Some(1),
+            crate::modes::KIND_NXDN => Some(systems::SYSTEM_NXDN),
             _ => None,
         };
         if let Some(want) = want {
+            // An NXDN conventional channel needs no system (its system is optional).
             if t.system == 0xFF {
-                add(err, Table::Channels, n, name, "The channel names no system.".into());
+                if t.kind != crate::modes::KIND_NXDN {
+                    add(err, Table::Channels, n, name, "The channel names no system.".into());
+                }
             } else {
                 match cp.systems.iter().find(|s| s.number == u16::from(t.system) + 1) {
                     None => add(warn, Table::Channels, n, name, format!("The system the channel names (number {}) is not there.", u16::from(t.system) + 1)),
                     Some(s) if s.type_id != want => add(err, Table::Channels, n, name, "The channel's system is of another type.".into()),
                     _ => {}
+                }
+            }
+        }
+        if let crate::modes::Params::Nxdn(p) = &t.params {
+            if let Some(id) = p.tx_key_id {
+                let sys = (t.system != 0xFF).then(|| cp.systems.iter().find(|s| s.number == u16::from(t.system) + 1)).flatten();
+                if !sys.is_some_and(|s| s.traffic_keys.iter().any(|k| k.id == u16::from(id))) {
+                    add(err, Table::Channels, n, name, "The transmit key is not one of the channel's system's keys.".into());
                 }
             }
         }
@@ -486,6 +498,9 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
             if s.secret.as_deref().is_some_and(|v| systems::decode_t3_key(v).is_none()) {
                 add(err, Table::Systems, n, name, "The key is shorter than 16 octets.".into());
             }
+        }
+        if s.type_id == systems::SYSTEM_NXDN && s.own_id > crate::modes::NXDN_UNIT_MAX {
+            add(err, Table::Systems, n, name, format!("The radio's ID on the system is above {}.", crate::modes::NXDN_UNIT_MAX));
         }
         if s.needs_key && s.secret.is_none() {
             add(warn, Table::Systems, n, name, "The system needs its secret but has none.".into());

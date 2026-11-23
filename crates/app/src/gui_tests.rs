@@ -653,7 +653,7 @@ fn a_channel_is_made_nxdn_and_its_fields_are_edited() {
     retype(&mut h, "TX RAN", "9");
     retype(&mut h, "RX RAN", "70"); // above 63: not applied
     let t = channel(&h).tagged.as_ref().unwrap();
-    assert_eq!(t.params, Params::Nxdn(NxdnConv { rate9600: false, squelch: 0, rx_ran: 5, tx_ran: 9 }));
+    assert_eq!(t.params, Params::Nxdn(NxdnConv { rate9600: false, squelch: 0, rx_ran: 5, tx_ran: 9, tx_key_id: None }));
 }
 
 #[test]
@@ -911,6 +911,117 @@ fn a_tier_iii_channel_is_put_on_a_system_and_may_transmit_as_in_the_web_editor()
     assert_eq!((c.rx_hz, c.tx_hz), (438_100_000, 443_100_000));
     assert!(c.rx_only);
     h.get_by_role_and_label(Role::ComboBox, "System");
+}
+
+#[test]
+fn an_nxdn_system_keeps_scrambler_keys_shown_only_when_asked() {
+    let mut h = harness_on_systems(|_| {});
+    click(&mut h, "Add NXDN conventional system");
+    let s = &doc_systems(&h)[0];
+    // Like a Tier III system, a new NXDN system can transmit.
+    assert_eq!((s.type_id, s.tx), (sys::SYSTEM_NXDN, true));
+    h.get_by_label("NXDN conventional");
+    click(&mut h, "Add key");
+    click(&mut h, "Add key");
+    let ids = |h: &H| doc_systems(h)[0].traffic_keys.iter().map(|k| k.id).collect::<Vec<_>>();
+    assert_eq!(ids(&h), vec![0, 1]);
+    // A seed is a secret: not shown until asked.
+    assert!(h.query_by_role_and_label(Role::TextInput, "Scrambler seed, key 1").is_none());
+    click(&mut h, "Show scrambler seeds");
+    retype(&mut h, "Scrambler seed, key 1", "4242");
+    retype(&mut h, "Scrambler seed, key 2", "0"); // a seed is 1 to 32767: not applied
+    assert_eq!(doc_systems(&h)[0].traffic_keys.iter().map(|k| k.seed).collect::<Vec<_>>(), vec![4242, 1]);
+    retype(&mut h, "Key ID, key 2", "64"); // a key ID is 0 to 63: not applied
+    assert_eq!(ids(&h), vec![0, 1]);
+    retype(&mut h, "Key ID, key 2", "0");
+    h.get_by_label_contains("Key ID 0 is already used");
+    retype(&mut h, "Key ID, key 2", "7");
+    assert_eq!(ids(&h), vec![0, 7]);
+    // The radio's ID on an NXDN system is a unit ID: up to 65519.
+    type_into(&mut h, "This radio's ID on the system", "70000");
+    assert_eq!(doc_systems(&h)[0].own_id, 0);
+    retype(&mut h, "This radio's ID on the system", "1234");
+    assert_eq!(doc_systems(&h)[0].own_id, 1234);
+}
+
+#[test]
+fn an_nxdn_channel_picks_its_system_and_transmit_key() {
+    let mut h = harness_with_channel(|cp| {
+        let mut s = System::new(sys::SYSTEM_NXDN, "Net");
+        s.traffic_keys = vec![sys::TrafficKey { slot: None, id: 5, seed: 99, flags: 0 }];
+        cp.systems.push(s);
+    });
+    pick(&mut h, "Mode", "NXDN");
+    // The system is optional: a new NXDN channel is on none, and sends clear.
+    let t = channel(&h).tagged.clone().unwrap();
+    assert_eq!(t.system, 0xFF);
+    pick(&mut h, "System", "1  Net");
+    assert_eq!(channel(&h).tagged.as_ref().unwrap().system, 0);
+    pick(&mut h, "Transmit key", "Key 5");
+    match &channel(&h).tagged.as_ref().unwrap().params {
+        modes::Params::Nxdn(p) => assert_eq!(p.tx_key_id, Some(5)),
+        other => panic!("{other:?}"),
+    }
+    pick(&mut h, "Transmit key", "Clear");
+    match &channel(&h).tagged.as_ref().unwrap().params {
+        modes::Params::Nxdn(p) => assert_eq!(p.tx_key_id, None),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_recommended_ham_systems_are_added_from_a_site_s_control_channel() {
+    let mut h = harness_on_systems(|_| {});
+    click(&mut h, "Recommended ham Tier III system…");
+    type_into(&mut h, "Control channel RX (MHz)", "438.1");
+    retype(&mut h, "Site number (0 to 1022)", "17");
+    click(&mut h, "Add system");
+    let s = &doc_systems(&h)[0];
+    assert_eq!((s.type_id, s.name.as_str(), s.tx), (sys::SYSTEM_T3, "Ham Tier III", true));
+    match &s.fields {
+        SystemFields::T3(f) => assert_eq!((f.model, f.net, f.color_code, f.register_talkgroups), (3, 1, 1, true)),
+        other => panic!("{other:?}"),
+    }
+    // The control channel's channel number is 4 x site + 1, and its TX is its RX when none is given.
+    assert!(matches!(s.entries[0].body, EntryBody::T3Channel { lcn: 69, rx_hz: 438_100_000, tx_hz: 438_100_000, .. }));
+
+    click(&mut h, "Recommended ham P25 system…");
+    type_into(&mut h, "Control channel RX (MHz)", "851.0125");
+    type_into(&mut h, "Control channel TX (MHz, blank: as RX)", "806.0125");
+    type_into(&mut h, "Name for the new system", "Pacific");
+    click(&mut h, "Add system");
+    let s = &doc_systems(&h)[1];
+    assert_eq!((s.type_id, s.name.as_str()), (sys::SYSTEM_P25_TRUNK, "Pacific"));
+    assert!(matches!(&s.fields, SystemFields::P25Trunk(f) if f.wacn == Some(0x32350) && f.cc_nac == Some(0x293) && f.skip_enc));
+    assert!(matches!(s.entries[0].body, EntryBody::P25Control { rx_hz: 851_012_500, tx_hz: 806_012_500, .. }));
+
+    // Nothing is added without a control channel.
+    click(&mut h, "Recommended ham P25 system…");
+    assert!(disabled(&h, "Add system"));
+    click(&mut h, "Cancel");
+    assert_eq!(doc_systems(&h).len(), 2);
+}
+
+#[test]
+fn a_tx_frequency_in_a_receive_only_band_is_refused_unless_the_rx_is_there() {
+    let mut h = harness_with_channel(|_| {});
+    let before = channel(&h).tx_hz;
+    // The channel's RX is a repeater band: a TX typed in the air band (118 MHz) is not applied.
+    type_into(&mut h, "TX MHz", "118.0");
+    assert_eq!(channel(&h).tx_hz, before);
+    // An RX typed in the air band makes the channel RX only with TX on RX.
+    retype(&mut h, "RX MHz", "118.0");
+    let c = channel(&h);
+    assert_eq!((c.rx_hz, c.tx_hz, c.rx_only), (118_000_000, 118_000_000, true));
+}
+
+#[test]
+fn accept_invalid_crc_is_a_dmr_channel_setting() {
+    let mut h = harness_with_channel(|_| {});
+    pick(&mut h, "Mode", "DMR");
+    assert!(!channel(&h).accept_bad_crc);
+    click(&mut h, "Accept Invalid CRC");
+    assert!(channel(&h).accept_bad_crc);
 }
 
 // --- DTMF contacts and APRS configurations ---

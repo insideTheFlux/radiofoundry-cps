@@ -36,11 +36,55 @@ pub const SHARE_WHOLE: u8 = 2;
 
 pub const SYSTEM_T3: u8 = 1;
 pub const SYSTEM_P25_TRUNK: u8 = 3;
+pub const SYSTEM_NXDN: u8 = 4;
+
+/// Traffic keys (channel-modes.md 5.4): key 0x1900 + n, 1024 of them. Only an NXDN conventional system has any this
+/// editor reads; the records of other types are kept as stored.
+pub const TRAFFIC_KEY: u16 = 0x1900;
+pub const MAX_TRAFFIC: usize = 1024;
+/// Marks the entries too many for their family (never stored).
+pub const OVERFLOW_KEY: u16 = 0xFFFF;
+/// A traffic key's algorithm: the NXDN Scrambler. Key IDs 0 to 63, seeds 1 to 32767 (nxdn-codeplug.md 3).
+pub const SCRAMBLER: u8 = 1;
+pub const KEY_ID_MAX: u16 = 63;
+pub const SEED_MAX: u16 = 32767;
+
+/// A scrambler key of an NXDN system. `slot` is the key (0x1900 up) it was read from, `None` for a new one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrafficKey {
+    pub slot: Option<u16>,
+    pub id: u16,
+    pub seed: u16,
+    pub flags: u8,
+}
+
+/// A traffic-key record's key, or `None` when it is no scrambler key this editor reads (kept as stored then).
+pub fn decode_traffic(v: &[u8]) -> Option<TrafficKey> {
+    if v.len() != 7 || v[1] != SCRAMBLER {
+        return None;
+    }
+    let (id, seed) = (u16_at(v, 2), u16_at(v, 5));
+    (id <= KEY_ID_MAX && (1..=SEED_MAX).contains(&seed)).then_some(TrafficKey { slot: None, id, seed, flags: v[4] })
+}
+
+/// A key's record for system `system` (0-based).
+pub fn encode_traffic(system: u8, k: &TrafficKey) -> Vec<u8> {
+    let mut v = vec![system, SCRAMBLER, 0, 0, k.flags, 0, 0];
+    v[2..4].copy_from_slice(&k.id.to_le_bytes());
+    v[5..7].copy_from_slice(&k.seed.to_le_bytes());
+    v
+}
+
+/// Whether a system type keeps traffic keys this editor reads.
+pub fn has_traffic(type_id: u8) -> bool {
+    type_id == SYSTEM_NXDN
+}
 
 pub fn type_name(t: u8) -> &'static str {
     match t {
         SYSTEM_T3 => "T3",
         SYSTEM_P25_TRUNK => "P25T",
+        SYSTEM_NXDN => "NXDN",
         _ => "?",
     }
 }
@@ -369,6 +413,8 @@ pub fn parse_key_hex(text: &str) -> Option<[u8; 16]> {
 pub enum SystemFields {
     P25Trunk(P25Trunk),
     T3(T3System),
+    /// An NXDN conventional system: an empty parameter block (nxdn-codeplug.md 3).
+    Nxdn,
     Unknown,
 }
 
@@ -376,6 +422,7 @@ fn decode_fields(type_id: u8, block: &[u8]) -> SystemFields {
     match type_id {
         SYSTEM_P25_TRUNK => SystemFields::P25Trunk(decode_p25_trunk(block)),
         SYSTEM_T3 => SystemFields::T3(decode_t3(block)),
+        SYSTEM_NXDN => SystemFields::Nxdn,
         _ => SystemFields::Unknown,
     }
 }
@@ -384,6 +431,7 @@ fn encode_fields(f: &SystemFields, prev: Option<&[u8]>) -> Option<Vec<u8>> {
     match f {
         SystemFields::P25Trunk(x) => Some(encode_p25_trunk(x, prev)),
         SystemFields::T3(x) => Some(encode_t3(x, prev)),
+        SystemFields::Nxdn => Some(grow(prev, 0)),
         SystemFields::Unknown => None,
     }
 }
@@ -393,6 +441,7 @@ fn id_len(type_id: u8) -> Option<u8> {
     match type_id {
         SYSTEM_P25_TRUNK => Some(P25_ID_LEN),
         SYSTEM_T3 => Some(T3_ID_LEN),
+        SYSTEM_NXDN => Some(0),
         _ => None,
     }
 }
@@ -407,6 +456,7 @@ pub fn new_fields(type_id: u8) -> SystemFields {
     match type_id {
         SYSTEM_P25_TRUNK => SystemFields::P25Trunk(P25Trunk::default()),
         SYSTEM_T3 => SystemFields::T3(T3System::default()),
+        SYSTEM_NXDN => SystemFields::Nxdn,
         _ => SystemFields::Unknown,
     }
 }
@@ -562,6 +612,8 @@ pub struct System {
     pub fallback: Fallback,
     pub fields: SystemFields,
     pub entries: Vec<SysEntry>,
+    /// The scrambler keys of an NXDN system (the keys of other types are kept as stored, unread).
+    pub traffic_keys: Vec<TrafficKey>,
     /// The system's own secret, as stored (never shown): `None` for none.
     pub secret: Option<Vec<u8>>,
     /// The record as read; empty for a system made here.
@@ -579,12 +631,13 @@ impl System {
             own_id: 0,
             // As the web editor makes them: a Tier III system is transmit-capable (a site grants every
             // transmission), a P25 trunked one listen only until the user turns the transmit side on.
-            tx: type_id == SYSTEM_T3,
+            tx: matches!(type_id, SYSTEM_T3 | SYSTEM_NXDN),
             needs_key: false,
             flags_raw: 0,
             fallback: Fallback::None,
             fields: new_fields(type_id),
             entries: Vec::new(),
+            traffic_keys: Vec::new(),
             secret: None,
             raw: Vec::new(),
         }
@@ -593,6 +646,9 @@ impl System {
     /// Two systems with the same identity are the same system (7.1); `None` for a type this editor doesn't know.
     pub fn identity(&self) -> Option<String> {
         let len = usize::from(id_len(self.type_id)?);
+        if len == 0 {
+            return None; // no identity bytes: the system can't be matched by them (7.1)
+        }
         let block = encode_fields(&self.fields, None)?;
         Some(format!("{}:{:?}", self.type_id, &block[..len.min(block.len())]))
     }
@@ -653,9 +709,18 @@ pub fn decode_systems(entries: &[Entry], channel_names: &HashMap<u16, String>) -
             fallback: fb,
             fields: decode_fields(h.type_id, h.block),
             entries: Vec::new(),
+            traffic_keys: Vec::new(),
             secret: kv::get_value(entries, SECRET_KEY + n as u16).map(<[u8]>::to_vec),
             raw: raw.to_vec(),
         });
+    }
+    for e in entries.iter().filter(|e| (TRAFFIC_KEY..TRAFFIC_KEY + MAX_TRAFFIC as u16).contains(&e.key)) {
+        let Some(&sys) = e.value.first() else { continue };
+        if let Some(s) = systems.iter_mut().find(|s| s.number == u16::from(sys) + 1 && has_traffic(s.type_id)) {
+            if let Some(k) = decode_traffic(&e.value) {
+                s.traffic_keys.push(TrafficKey { slot: Some(e.key), ..k });
+            }
+        }
     }
     let mut fam: Vec<&Entry> =
         entries.iter().filter(|e| (ENTRY_KEY..ENTRY_KEY + MAX_ENTRIES as u16).contains(&e.key)).collect();
@@ -723,6 +788,7 @@ pub fn system_entries(
     mut out: Vec<Entry>,
     names: &HashMap<u16, &str>,
 ) -> Vec<Entry> {
+    let stored = out.clone();
     let valid: Vec<&System> =
         systems.iter().filter(|s| (1..=MAX_SYSTEMS as u16).contains(&s.number)).collect();
     for n in 0..MAX_SYSTEMS {
@@ -750,6 +816,45 @@ pub fn system_entries(
             Some(raw) => crate::modes::set(&mut out, skey, raw),
         }
     }
+    // Traffic keys: a key read keeps its slot; a new one takes the first free one. A stored record of a type this
+    // editor reads goes when its key is gone from the model or its system is.
+    let mut pending: Vec<Vec<u8>> = Vec::new();
+    for s in valid.iter().filter(|s| has_traffic(s.type_id)) {
+        for k in &s.traffic_keys {
+            let v = encode_traffic((s.number - 1) as u8, k);
+            match k.slot {
+                Some(slot) => crate::modes::set(&mut out, slot, &v),
+                None => pending.push(v),
+            }
+        }
+    }
+    for e in stored.iter().filter(|e| (TRAFFIC_KEY..TRAFFIC_KEY + MAX_TRAFFIC as u16).contains(&e.key)) {
+        let Some(&sys) = e.value.first() else { continue };
+        let owner = kv::get_value(&stored, SYSTEM_KEY + u16::from(sys)).and_then(decode_header);
+        if !owner.is_some_and(|h| has_traffic(h.type_id)) {
+            continue;
+        }
+        let s = valid.iter().find(|s| s.number == u16::from(sys) + 1);
+        if s.is_none_or(|s| s.raw.is_empty())
+            || (decode_traffic(&e.value).is_some() && !s.is_some_and(|s| s.traffic_keys.iter().any(|k| k.slot == Some(e.key))))
+        {
+            crate::modes::del(&mut out, e.key);
+        }
+    }
+    let occupied: std::collections::HashSet<u16> = out.iter().map(|e| e.key).collect();
+    let mut slot = TRAFFIC_KEY;
+    let mut overflow = false;
+    for v in pending {
+        while occupied.contains(&slot) {
+            slot += 1;
+        }
+        if usize::from(slot - TRAFFIC_KEY) < MAX_TRAFFIC {
+            crate::modes::set(&mut out, slot, &v);
+            slot += 1;
+        } else {
+            overflow = true;
+        }
+    }
     // Entries: the family rewritten from 0x0200 up, in system order, when any record changed.
     let mut want: Vec<Vec<u8>> = Vec::new();
     let mut sorted = valid.clone();
@@ -773,7 +878,67 @@ pub fn system_entries(
             out = kv::set_value(&out, ENTRY_KEY + i as u16, v);
         }
     }
+    if overflow {
+        // More new keys than slots: the writer sees the sentinel and refuses (the area can't hold them).
+        out.push(Entry { key: OVERFLOW_KEY, value: Vec::new() });
+    }
     out
+}
+
+/// The recommended ham Tier III system's network and the control channel number of a site (ham-trunking.md 2): one
+/// network for every ham site (Huge NET 1, category A, color code 1), and 4 x site + 1 as the control channel's LCN so
+/// no two sites' channel numbers clash.
+pub const HAM_T3_MODEL: u8 = 3;
+pub const HAM_T3_NET: u16 = 1;
+pub const HAM_T3_SITE_MAX: u16 = 1022;
+
+pub fn ham_t3_lcn(site: u16) -> u16 {
+    4 * site + 1
+}
+
+/// The recommended ham P25 trunked system's identity (ham-trunking.md 3): WACN 0x32350, any system ID, control channel
+/// NAC 0x293, encrypted calls skipped.
+pub const HAM_P25_WACN: u32 = 0x32350;
+pub const HAM_P25_CC_NAC: u16 = 0x293;
+
+/// A system of the type's recommended ham setup, with the control channel of the site the user uses: `rx_hz`, `tx_hz`
+/// (0: as RX) and, for Tier III, the site's number. `None` for a type without a recommended setup.
+pub fn new_ham_system(type_id: u8, name: &str, rx_hz: u32, tx_hz: u32, site: u16) -> Option<System> {
+    let tx_hz = if tx_hz == 0 { rx_hz } else { tx_hz };
+    let (default_name, fields, body, group) = match type_id {
+        SYSTEM_P25_TRUNK => (
+            "Ham P25",
+            SystemFields::P25Trunk(P25Trunk {
+                wacn: Some(HAM_P25_WACN),
+                sysid: None,
+                cc_nac: Some(HAM_P25_CC_NAC),
+                skip_enc: true,
+                ..P25Trunk::default()
+            }),
+            EntryBody::P25Control { iden: 0, chan_no: 0, rx_hz, tx_hz },
+            0u8,
+        ),
+        SYSTEM_T3 => (
+            "Ham Tier III",
+            SystemFields::T3(T3System {
+                model: HAM_T3_MODEL,
+                net: HAM_T3_NET,
+                category_b: false,
+                color_code: 1,
+                register_talkgroups: true,
+                ..T3System::default()
+            }),
+            EntryBody::T3Channel { lcn: ham_t3_lcn(site), rx_hz, tx_hz, cc: None },
+            0xFF,
+        ),
+        _ => return None,
+    };
+    let mut s = System::new(type_id, if name.is_empty() { default_name } else { name });
+    s.tx = true;
+    s.needs_key = false;
+    s.fields = fields;
+    s.entries = vec![SysEntry { cls: 0, group, control: true, flags: 0, body, raw: Vec::new() }];
+    Some(s)
 }
 
 /// Lowest free system numbers given to the systems that have none (`number` 0).

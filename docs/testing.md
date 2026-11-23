@@ -88,7 +88,7 @@ case, the image it encodes, a canonical dump of what it decodes, its CSV, qdmr a
 of cases it also writes the first one's model onto the second one's bytes. `crates/core/tests/differential.rs` makes the CPS
 do the same and compares everything. It runs only when `RFCPS_FUZZ_DIR` is set (`run-all.sh` does: 3 seeds of 100 cases, more
 with `DIFF_SEEDS` and `DIFF_CASES`). It reports every mismatch with the edits that led to it. The CPS-only weather-channel
-warning is left out of the problem comparison. Use several seeds and the prepared base (`differential_prep.mjs`), since a
+warning is left out of the problem comparison. Each case also imports the web editor's qdmr file into a fresh read of the image and compares what that decodes to and exports as, and a re-encode (the web editor's own: a channel in a listen band is written RX only with TX on RX), and `ham.json` checks the recommended ham systems. The edits include NXDN systems, scrambler keys and transmit keys. The tests compare with the web editor that is checked out, so check out its current `main` first (`c2551ffe`, 2026-11-22, is the last it was run against: 0 mismatches in 3 x 100 cases). Use several seeds and the prepared base (`differential_prep.mjs`), since a
 plain image has no systems or tags. `crates/link/tests/lz4_spec.rs` checks the streams the editor sends are valid LZ4 blocks
 that obey the format's end rules and the 4128-byte limit; it needs no web editor.
 
@@ -103,6 +103,7 @@ to it, with `RFCPS_GOLDEN` and the others made from the same file by the same sc
 | `RFCPS_CSV_DIR` | the web editor's CSV export of the six tables of the image (`csv6_js.mjs`) |
 | `RFCPS_CHIRP_CSV` | its CHIRP CSV export of the image (`chirp_js.mjs`) |
 | `RFCPS_QDMR_DIR` | its qdmr YAML export of the image, and of an export imported again (`qdmr_js.mjs`) |
+| `RFCPS_FUZZ_DIR` | its random edits (`differential_gen.mjs`): per case the image, a re-encode, a canonical dump, the CSV, qdmr and CHIRP exports, the problems, and the qdmr file imported again; plus `ham.json`, the recommended ham systems built by `newHamSystem` |
 | `RFCPS_STOCK_DATA`, `RFCPS_STOCK_GOLDEN` | a stock DM-32UV backup of your own and the web editor's import of it (`stock_js.mjs`); not made by `run-all.sh` |
 | `RFCPS_KV_DIR` | the web editor's settings-area sectors for fixed key edits, with the radio-merge case (`edit_kv.mjs`, a small Node script over `kv.js` `putKeys` and `areaForWrite`) |
 | `RFCPS_MODES_DIR` | the web editor's whole images for fixed channel-mode edits (`edit_modes.mjs`: `setKind` to P25 and NXDN with parameters and unit IDs, a rename, a delete, back to plain; `model.js` `encode()`) |

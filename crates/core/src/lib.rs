@@ -18,6 +18,7 @@ pub mod model;
 pub mod modes;
 pub mod problems;
 pub mod qdmr;
+mod qdmr_modes;
 pub mod radioid;
 pub mod regions;
 pub mod records;

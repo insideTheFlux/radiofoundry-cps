@@ -5,9 +5,9 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 const J = `${process.env.RFOUNDRY_DIR || process.env.HOME + "/rfoundry"}/site/static/js/codeplug`;
 const { CodeplugImage } = await import(`${J}/image.js`);
 const { decode, encode, remove, newChannel, newContact, validate } = await import(`${J}/model.js`);
-const { setKind, newSystem } = await import(`${J}/channelmodes.js`);
+const { setKind, newSystem, newHamSystem } = await import(`${J}/channelmodes.js`);
 const { exportTable, TABLES, ORDER } = await import(`${J}/csv.js`);
-const { exportQdmr } = await import(`${J}/qdmr.js`);
+const { exportQdmr, importQdmr } = await import(`${J}/qdmr.js`);
 const { exportChirp } = await import(`${J}/chirp.js`);
 
 const [basePath, outDir, nCases, seed0] = [process.argv[2], process.argv[3], Number(process.argv[4] || 80), Number(process.argv[5] || 1)];
@@ -76,13 +76,32 @@ const OPS = {
 		m.systems.push(s);
 		if (chance(0.7) && m.channels.length) { const c = ch(m); setKind(m, c, t === 1 ? 1 : 3); }
 	},
+	nxdnSys: (m) => {
+		const s = newSystem(m, 4, word(16));
+		s.tx = chance(0.7); s.ownId = chance(0.5) ? 0 : chance(0.9) ? 1 + rnd(65519) : 70000;
+		const used = new Set();
+		for (let i = rnd(4); i > 0; i--) { const id = rnd(64); if (!used.has(id)) { used.add(id); s.trafficKeys.push({ id, seed: 1 + rnd(32767), flags: chance(0.2) ? rnd(256) : 0 }); } }
+		m.systems.push(s);
+		if (chance(0.7) && m.channels.length) { const c = ch(m); setKind(m, c, 4); c.system = s; if (s.trafficKeys.length && chance(0.6)) c.params.txKeyId = pick(s.trafficKeys).id; else if (chance(0.15)) c.params.txKeyId = rnd(64); }
+	},
+	keyEdit: (m) => {
+		const sys = m.systems.filter((s) => s.type === 4); if (!sys.length) return; const s = pick(sys);
+		if (chance(0.4) && s.trafficKeys.length) s.trafficKeys.splice(rnd(s.trafficKeys.length), 1);
+		else if (chance(0.5)) { const id = rnd(64); if (!s.trafficKeys.some((k) => k.id === id)) s.trafficKeys.push({ id, seed: 1 + rnd(32767), flags: 0 }); }
+		else if (s.trafficKeys.length) pick(s.trafficKeys).seed = 1 + rnd(32767);
+	},
+	nxdnTx: (m) => { const c = m.channels.find((x) => x.kind === 4 && chance(0.5)); if (!c) return; if (chance(0.3)) delete c.params.txKeyId; else if (c.system && typeof c.system === "object" && c.system.trafficKeys.length) c.params.txKeyId = pick(c.system.trafficKeys).id; },
 	sysEdit: (m) => { if (!m.systems.length) return; const s = pick(m.systems); if (chance(0.5)) s.name = word(16); if (chance(0.5)) s.tx = !s.tx; if (s.entries.length && chance(0.5)) s.entries.splice(rnd(s.entries.length), 1); },
 	sysDel: (m) => { if (m.systems.length) remove(m, "systems", [pick(m.systems)]); },
 };
-const WEIGHT = { listEdit: 3, manyChannels: 1, bigZone: 2, zoneShuffle: 2, kind: 5, sysAdd: 3, sysEdit: 2, rename: 3, delChannel: 2, zoneEdit: 2, unitIds: 2 };
+const WEIGHT = { nxdnSys: 2, keyEdit: 2, nxdnTx: 2, listEdit: 3, manyChannels: 1, bigZone: 2, zoneShuffle: 2, kind: 5, sysAdd: 3, sysEdit: 2, rename: 3, delChannel: 2, zoneEdit: 2, unitIds: 2 };
 const OPNAMES = Object.keys(OPS).flatMap((k) => Array(WEIGHT[k] || 1).fill(k));
 
 const cleanProblems = (ps) => ps.map((p) => ({ level: p.level, table: p.table, number: p.item && typeof p.item === "object" ? p.item.number ?? null : null }));
+
+function sysDump(s) {
+	return ({ number: s.number, type: s.type, name: s.name, sharing: s.sharing, ownId: s.ownId, tx: s.tx, needsKey: s.needsKey, fields: s.fields, entries: s.entries.map(({ raw, ...e }) => (s.type === 3 && e.cls === 0 && e.chan === undefined ? { ...e, chan: ((e.iden & 15) << 12) | (e.chanNo & 0xFFF) } : e)), hasSecret: !!s.secret, trafficKeys: (s.trafficKeys ?? []).map((k) => ({ id: k.id, seed: k.seed, flags: k.flags, slot: k.slot ?? null })) });
+}
 
 function dump(m) {
 	const n = (x) => num(x);
@@ -98,7 +117,7 @@ function dump(m) {
 		rxLists: m.rxLists.map((l) => ({ number: l.number, name: l.name, contacts: l.contacts.map(n) })),
 		dtmf: m.dtmfContacts.map((d) => ({ number: d.number, name: d.name, code: d.code })),
 		aprs: m.aprs.map((a) => ({ number: a.number, name: a.name, ssid: a.ssid, lat: a.lat, lon: a.lon, path1: a.path1, path2: a.path2, symTable: a.symTable, symCode: a.symCode, comment: a.comment, txHz: a.txHz, baud300: a.baud300, useFixed: a.useFixed, qsy: a.qsy, silent: a.silent, ambiguity: a.ambiguity })),
-		systems: m.systems.map((s) => ({ number: s.number, type: s.type, name: s.name, sharing: s.sharing, ownId: s.ownId, tx: s.tx, needsKey: s.needsKey, fields: s.fields, entries: s.entries.map(({ raw, ...e }) => e), hasSecret: !!s.secret })),
+		systems: m.systems.map(sysDump),
 	};
 }
 
@@ -112,11 +131,14 @@ for (let i = 0; i < nCases; i++) {
 	try { bytes = encode(m).bytes; } catch (e) { console.log("case", i, "encode failed:", e.message, log.join(",")); continue; }
 	const dir = `${outDir}/c${i}`; mkdirSync(dir, { recursive: true });
 	writeFileSync(`${dir}/img.bin`, Buffer.from(bytes));
+	try { const again = decode(CodeplugImage.from(Uint8Array.from(bytes))); writeFileSync(`${dir}/reenc.bin`, Buffer.from(encode(again).bytes)); } catch (e) { writeFileSync(`${dir}/reenc.bin`, Buffer.from(bytes)); }
 	// what a reader decodes, and its exports and problems
 	const m2 = decode(CodeplugImage.from(Uint8Array.from(bytes)));
 	writeFileSync(`${dir}/dump.json`, JSON.stringify(dump(m2)));
 	for (const t of ORDER) writeFileSync(`${dir}/${TABLES[t].file}`, exportTable(m2, t));
 	writeFileSync(`${dir}/qdmr.yaml`, exportQdmr(m2).text);
+	// the file imported into a fresh read of the image, then what that decodes to and exports as
+	try { const m3 = decode(CodeplugImage.from(Uint8Array.from(bytes))); importQdmr(m3, exportQdmr(m2).text); writeFileSync(`${dir}/qdmr_rt_dump.json`, JSON.stringify(dump(m3))); writeFileSync(`${dir}/qdmr_rt.yaml`, exportQdmr(m3).text); } catch (e) { writeFileSync(`${dir}/qdmr_rt.yaml`, "ERR " + e.message); }
 	try { writeFileSync(`${dir}/chirp.csv`, exportChirp(m2).text); } catch (e) { writeFileSync(`${dir}/chirp.csv`, "ERR " + e.message); }
 	writeFileSync(`${dir}/problems.json`, JSON.stringify(cleanProblems(validate(m2))));
 	writeFileSync(`${dir}/ops.txt`, log.join(","));
@@ -133,3 +155,12 @@ for (const i of files) {
 }
 writeFileSync(`${outDir}/index.json`, JSON.stringify({ cases: files, pairs }));
 console.log("cases", files.length, "pairs", pairs.length);
+
+// the recommended ham systems (modes' `ham`), for the Rust side to build the same ones
+const hams = [];
+for (const [type, name, rxHz, txHz, site] of [[1, "", 438100000, 0, 0], [1, "My Site", 438100000, 443100000, 17], [1, "", 440000000, 0, 1022], [3, "", 851012500, 0, 0], [3, "Pacific", 851012500, 806012500, 0], [3, "X", 853000000, 808000000, 0]]) {
+	const m = decode(CodeplugImage.from(Uint8Array.from(base)));
+	const sys = newHamSystem(m, type, { name, rxHz, txHz, site });
+	hams.push({ args: { type, name, rxHz, txHz, site }, system: sysDump(sys) });
+}
+writeFileSync(`${outDir}/ham.json`, JSON.stringify(hams));
