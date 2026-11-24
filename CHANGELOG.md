@@ -1,5 +1,27 @@
 # Changes
 
+## 0.5.3
+
+Fixes found by running the 0.5.2 package on a hidden display and looking at every system and tab.
+
+### Fixed
+
+- **AES keys** (Systems tab): the key box showed about 7 of the 64 hex digits. It shows all of them now.
+- **Tone lists** (Channels tab): the "…" button beside a tone field fell into the next column of the channel form, so the
+  RX and TX rows did not line up, and in the channel table it was cut off to a sliver. It sits beside its field in the
+  form; the table has no button (pick a tone from the list in the form, or type it).
+- **P25 trunked systems**: the Sites, Control channels and Channel plan tables had their headings one column off from
+  their boxes, and the frequency boxes were cut to the width of their headings (a frequency read "851."). Headings and
+  boxes line up, and the boxes show their whole value.
+- **Tier III systems**: the Channels table had the same off-by-one headings.
+- The note under a system's "Transmit side" said only a new Tier III system can transmit; it now says Tier III, NXDN
+  or AES (the web editor starts all three able to transmit).
+
+### Not checked
+
+- Windows. Window sizes below the default (a hidden display without a window manager does not lay a window out again
+  when it is resized, so this could not be looked at).
+
 ## 0.5.2
 
 Brings the editor level with the web Codeplug Editor as of RadioFoundry `dd67ecd6` (2026-11-24).
