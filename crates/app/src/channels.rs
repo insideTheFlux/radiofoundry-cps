@@ -251,6 +251,8 @@ fn mode_combo(ui: &mut Ui, c: &mut Channel, systems: &[System], salt: (&str, u16
     let r = egui::ComboBox::from_id_salt(salt)
         .selected_text(shown)
         .width(58.0)
+        // all the modes at once: the list is longer than the default height
+        .height(280.0)
         .show_ui(ui, |ui| {
             if ui.selectable_label(kind == 0 && c.mode == Mode::Fm, "FM").clicked() {
                 modes::set_kind(c, 0, Mode::Fm, systems);
@@ -536,88 +538,99 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 .color(p.muted),
         );
     } else {
-        group(ui, "DMR");
-        egui::Grid::new(("dmr", number))
-            .num_columns(2)
-            .spacing([14.0, 9.0])
-            .show(ui, |ui| {
-                let l = ui.label("Color Code");
-                let cb = egui::ComboBox::from_id_salt(("dcc", number))
-                    .selected_text(c.color_code.to_string())
-                    .width(70.0)
-                    .show_ui(ui, |ui| {
-                        for n in 0..=15u8 {
-                            ui.selectable_value(&mut c.color_code, n, n.to_string());
-                        }
-                    });
-                cb.response.labelled_by(l.id);
-                ui.end_row();
-                let l = ui.label("Timeslot");
-                let cb = egui::ComboBox::from_id_salt(("dts", number))
-                    .selected_text(c.timeslot.to_string())
-                    .width(70.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut c.timeslot, 1, "1");
-                        ui.selectable_value(&mut c.timeslot, 2, "2");
-                    });
-                cb.response.labelled_by(l.id);
-                ui.end_row();
-                let l = ui.label("TX Contact");
-                contact_combo(ui, c, &choices.contacts, ("dcontact", number)).labelled_by(l.id);
-                ui.end_row();
+        dmr_group(ui, c, choices, false);
+    }
+}
+
+/// The DMR section of a channel: color code, timeslot, the talk target and the RX group list, the channel's own DMR ID,
+/// talkaround. A conventional AES channel keeps these (its record is DMR); it has no APRS or invalid-CRC fields here.
+fn dmr_group(ui: &mut Ui, c: &mut Channel, choices: &Choices, aes: bool) {
+    let number = c.number;
+    group(ui, "DMR");
+    egui::Grid::new(("dmr", number))
+        .num_columns(2)
+        .spacing([14.0, 9.0])
+        .show(ui, |ui| {
+            let l = ui.label("Color Code");
+            let cb = egui::ComboBox::from_id_salt(("dcc", number))
+                .selected_text(c.color_code.to_string())
+                .width(70.0)
+                .show_ui(ui, |ui| {
+                    for n in 0..=15u8 {
+                        ui.selectable_value(&mut c.color_code, n, n.to_string());
+                    }
+                });
+            cb.response.labelled_by(l.id);
+            ui.end_row();
+            let l = ui.label("Timeslot");
+            let cb = egui::ComboBox::from_id_salt(("dts", number))
+                .selected_text(c.timeslot.to_string())
+                .width(70.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut c.timeslot, 1, "1");
+                    ui.selectable_value(&mut c.timeslot, 2, "2");
+                });
+            cb.response.labelled_by(l.id);
+            ui.end_row();
+            let l = ui.label("TX Contact");
+            contact_combo(ui, c, &choices.contacts, ("dcontact", number)).labelled_by(l.id);
+            ui.end_row();
+            if !aes {
                 let l = ui.label("APRS");
                 aprs_combo(ui, c, choices, ("daprs", number)).labelled_by(l.id);
                 ui.end_row();
-                let l = ui.label("RX Group List");
-                let shown = if c.rx_list == 0 {
-                    "none".to_string()
-                } else {
-                    choices
-                        .lists
-                        .iter()
-                        .find(|(n, _)| *n == c.rx_list)
-                        .map_or(format!("#{}", c.rx_list), |(_, n)| n.clone())
-                };
-                let cb = egui::ComboBox::from_id_salt(("dlist", number))
-                    .selected_text(shown)
-                    .width(160.0)
-                    .truncate()
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut c.rx_list, 0, "none");
-                        for (n, name) in &choices.lists {
-                            ui.selectable_value(&mut c.rx_list, *n, name);
-                        }
-                    });
-                cb.response.labelled_by(l.id);
-                ui.end_row();
-                let l = ui.label("Channel DMR ID");
-                let id = egui::Id::unique(("d_id", number));
-                let shown = if c.dmr_id == 0 {
-                    String::new()
-                } else {
-                    c.dmr_id.to_string()
-                };
-                let (r, v) = checked_text(ui, id, shown, 120.0, |s| {
-                    let t = s.trim();
-                    if t.is_empty() {
-                        Some(0u32)
-                    } else {
-                        t.parse::<u32>().ok().filter(|v| *v <= 16_777_215)
+            }
+            let l = ui.label("RX Group List");
+            let shown = if c.rx_list == 0 {
+                "none".to_string()
+            } else {
+                choices
+                    .lists
+                    .iter()
+                    .find(|(n, _)| *n == c.rx_list)
+                    .map_or(format!("#{}", c.rx_list), |(_, n)| n.clone())
+            };
+            let cb = egui::ComboBox::from_id_salt(("dlist", number))
+                .selected_text(shown)
+                .width(160.0)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut c.rx_list, 0, "none");
+                    for (n, name) in &choices.lists {
+                        ui.selectable_value(&mut c.rx_list, *n, name);
                     }
                 });
-                r.labelled_by(l.id);
-                if let Some(v) = v {
-                    c.dmr_id = v;
+            cb.response.labelled_by(l.id);
+            ui.end_row();
+            let l = ui.label("Channel DMR ID");
+            let id = egui::Id::unique(("d_id", number));
+            let shown = if c.dmr_id == 0 {
+                String::new()
+            } else {
+                c.dmr_id.to_string()
+            };
+            let (r, v) = checked_text(ui, id, shown, 120.0, |s| {
+                let t = s.trim();
+                if t.is_empty() {
+                    Some(0u32)
+                } else {
+                    t.parse::<u32>().ok().filter(|v| *v <= 16_777_215)
                 }
-                ui.end_row();
-                let l = ui.label("Force Direct Mode");
-                ui.checkbox(&mut c.dmo, "").labelled_by(l.id);
-                ui.end_row();
+            });
+            r.labelled_by(l.id);
+            if let Some(v) = v {
+                c.dmr_id = v;
+            }
+            ui.end_row();
+            let l = ui.label("Force Direct Mode");
+            ui.checkbox(&mut c.dmo, "").labelled_by(l.id);
+            ui.end_row();
+            if !aes {
                 let l = ui.label("Accept Invalid CRC");
                 ui.checkbox(&mut c.accept_bad_crc, "").labelled_by(l.id);
                 ui.end_row();
-            });
-    }
+            }
+        });
 }
 
 /// A hex field of up to three digits (a NAC); the value is applied only when the text is one.
@@ -784,6 +797,68 @@ fn mode_group(ui: &mut Ui, c: &mut Channel, systems: &[System], choices: &Choice
             if let Some(t) = &mut c.tagged {
                 t.system = system;
                 t.params = Params::Nxdn(p);
+            }
+        }
+        Some(Params::Aes(mut p)) => {
+            // The record is a DMR channel: its DMR fields stay, and the AES section names the system and the key.
+            dmr_group(ui, c, choices, true);
+            group(ui, "DMR AES-256");
+            let mut system = c.tagged.as_ref().map_or(0xFF, |t| t.system);
+            egui::Grid::new(("aes", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+                let l = ui.label("System");
+                let shown = systems
+                    .iter()
+                    .find(|s| system != 0xFF && s.number == u16::from(system) + 1)
+                    .map_or_else(
+                        || if system == 0xFF { "none".to_string() } else { format!("#{} (missing)", u16::from(system) + 1) },
+                        |s| format!("{}  {}", s.number, s.name),
+                    );
+                egui::ComboBox::from_id_salt(("aessys", number))
+                    .selected_text(shown)
+                    .width(220.0)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut system, 0xFF, "none");
+                        for s in systems.iter().filter(|s| s.type_id == rfcps_core::systems::SYSTEM_AES) {
+                            ui.selectable_value(&mut system, (s.number - 1) as u8, format!("{}  {}", s.number, s.name));
+                        }
+                    })
+                    .response
+                    .labelled_by(l.id);
+                ui.end_row();
+                let l = ui.label("PI key ID");
+                let mut ids: Vec<u8> = systems
+                    .iter()
+                    .find(|s| system != 0xFF && s.number == u16::from(system) + 1)
+                    .map(|s| s.aes_keys.iter().map(|k| k.id).collect())
+                    .unwrap_or_default();
+                ids.sort_unstable();
+                let shown = match p.key_id {
+                    None => "None".to_string(),
+                    Some(id) if ids.contains(&id) => format!("Key {id}"),
+                    Some(id) => format!("Key {id} (not in the system)"),
+                };
+                egui::ComboBox::from_id_salt(("aeskey", number))
+                    .selected_text(shown)
+                    .width(220.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut p.key_id, None, "None");
+                        for id in &ids {
+                            ui.selectable_value(&mut p.key_id, Some(*id), format!("Key {id}"));
+                        }
+                    })
+                    .response
+                    .labelled_by(l.id);
+                ui.end_row();
+            });
+            ui.label(
+                RichText::new("The channel transmits encrypted with the picked key; with None it sends no AES. A channel whose key is missing from the radio refuses to transmit and never falls back to clear. AES applies to voice. Most countries do not allow encrypted messages on amateur frequencies.")
+                    .size(13.0)
+                    .color(muted),
+            );
+            if let Some(t) = &mut c.tagged {
+                t.system = system;
+                t.params = Params::Aes(p);
             }
         }
         Some(Params::P25Trunk(mut p)) => {

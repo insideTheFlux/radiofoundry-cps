@@ -1033,6 +1033,70 @@ fn an_nxdn_channel_picks_its_system_and_transmit_key() {
 }
 
 #[test]
+fn an_aes_system_keeps_aes_keys_shown_only_when_asked() {
+    let mut h = harness_on_systems(|_| {});
+    click(&mut h, "Add DMR AES-256 system");
+    let s = &doc_systems(&h)[0];
+    assert_eq!((s.type_id, s.tx), (sys::SYSTEM_AES, true));
+    assert_eq!(s.fields, SystemFields::Aes { network: 1 });
+    h.get_by_label("DMR AES-256");
+    click(&mut h, "Add AES-256 key");
+    click(&mut h, "Add AES-256 key");
+    let keys = |h: &H| doc_systems(h)[0].aes_keys.clone();
+    let ids = |h: &H| keys(h).iter().map(|k| k.id).collect::<Vec<_>>();
+    assert_eq!(ids(&h), vec![0, 1]);
+    // A new key starts random, and no two are alike
+    let (a, b) = (keys(&h)[0].key, keys(&h)[1].key);
+    assert!(a != [0u8; 32] && b != [0u8; 32] && a != b);
+    // A key is a secret: not shown until asked.
+    assert!(h.query_by_role_and_label(Role::TextInput, "AES-256 key, key 1").is_none());
+    click(&mut h, "Show AES keys");
+    let hex64 = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
+    retype(&mut h, "AES-256 key, key 1", hex64);
+    assert_eq!(rfcps_core::systems::key_hex_32(&keys(&h)[0].key), hex64);
+    // Not 64 hex digits: not applied
+    retype(&mut h, "AES-256 key, key 2", "1234");
+    assert_eq!(keys(&h)[1].key, b);
+    // Generate replaces a key
+    h.get_all_by_label("Generate").next().unwrap().click();
+    h.run();
+    assert!(keys(&h)[0].key != rfcps_core::systems::parse_key_hex_32(hex64).unwrap());
+    // A PI key ID is 0 to 255, and unique in the system
+    retype(&mut h, "PI key ID, key 2", "256");
+    assert_eq!(ids(&h), vec![0, 1]);
+    retype(&mut h, "PI key ID, key 2", "0");
+    h.get_by_label_contains("PI key ID 0 is already used");
+    retype(&mut h, "PI key ID, key 2", "200");
+    assert_eq!(ids(&h), vec![0, 200]);
+    retype(&mut h, "Network ID", "9");
+    assert_eq!(doc_systems(&h)[0].fields, SystemFields::Aes { network: 9 });
+}
+
+#[test]
+fn an_aes_channel_picks_its_system_and_key_and_keeps_its_dmr_fields() {
+    let mut h = harness_with_channel(|cp| {
+        let mut s = System::new(sys::SYSTEM_AES, "Fire");
+        s.aes_keys = vec![sys::AesKey { slot: None, id: 12, key: [7; 32], flags: 0 }];
+        cp.systems.push(s);
+        sys::number_systems(&mut cp.systems);
+    });
+    pick(&mut h, "Mode", "AES");
+    let t = channel(&h).tagged.clone().unwrap();
+    // It starts on the first AES system, with no key, and transmits (as the web editor starts one)
+    assert_eq!((t.kind, t.system, t.tx), (modes::KIND_AES, 0, true));
+    assert_eq!(t.params, Params::Aes(modes::AesChan { key_id: None }));
+    assert!(channel(&h).rx_only && channel(&h).mode == rfcps_core::records::Mode::Dmr);
+    // The DMR fields stay; the FM ones and APRS do not
+    h.get_by_role_and_label(Role::ComboBox, "Color Code");
+    h.get_by_role_and_label(Role::ComboBox, "TX Contact");
+    assert!(h.query_by_role_and_label(Role::ComboBox, "APRS").is_none());
+    pick(&mut h, "PI key ID", "Key 12");
+    assert_eq!(channel(&h).tagged.as_ref().unwrap().params, Params::Aes(modes::AesChan { key_id: Some(12) }));
+    pick(&mut h, "PI key ID", "None");
+    assert_eq!(channel(&h).tagged.as_ref().unwrap().params, Params::Aes(modes::AesChan { key_id: None }));
+}
+
+#[test]
 fn the_recommended_ham_systems_are_added_from_a_site_s_control_channel() {
     let mut h = harness_on_systems(|_| {});
     click(&mut h, "Recommended ham Tier III system…");

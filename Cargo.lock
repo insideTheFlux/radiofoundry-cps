@@ -2562,6 +2562,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "egui_kittest",
+ "getrandom 0.3.4",
  "rfcps-core",
  "rfcps-link",
  "rfd",

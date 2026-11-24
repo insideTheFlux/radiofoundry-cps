@@ -9,8 +9,8 @@ use crate::theme;
 use crate::widgets::{checked_text, name_edit, parse_mhz};
 use eframe::egui::{self, RichText, Ui};
 use rfcps_core::systems::{
-    self as sys, EntryBody, SysEntry, System, SystemFields, T3Key, T3System, TrafficKey, MAX_ENTRIES, MAX_SYSTEMS,
-    SYSTEM_NXDN, SYSTEM_P25_TRUNK, SYSTEM_T3,
+    self as sys, AesKey, EntryBody, SysEntry, System, SystemFields, T3Key, T3System, TrafficKey, MAX_ENTRIES,
+    MAX_SYSTEMS, SYSTEM_AES, SYSTEM_NXDN, SYSTEM_P25_TRUNK, SYSTEM_T3,
 };
 use rfcps_core::Codeplug;
 
@@ -40,6 +40,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
                 ("Add P25 trunked system", SYSTEM_P25_TRUNK),
                 ("Add DMR Tier III system", SYSTEM_T3),
                 ("Add NXDN conventional system", SYSTEM_NXDN),
+                ("Add DMR AES-256 system", SYSTEM_AES),
             ] {
                 if ui.add_enabled(cp.systems.len() < MAX_SYSTEMS, egui::Button::new(label)).clicked() {
                     let mut s = System::new(type_id, &format!("System {}", cp.systems.len() + 1));
@@ -211,6 +212,83 @@ fn traffic_keys(ui: &mut Ui, s: &mut System, number: u16) {
     );
 }
 
+/// A new random AES-256 key from the operating system, or `None` when its random source fails (never a key made of
+/// zeros or of anything predictable).
+fn random_key() -> Option<[u8; sys::AES_KEY_BYTES]> {
+    let mut k = [0u8; sys::AES_KEY_BYTES];
+    getrandom::fill(&mut k).ok().map(|()| k)
+}
+
+/// The AES-256 keys of a DMR AES system (channel-modes.md 4): an eight-bit PI key ID and 64 hex digits each. The keys are
+/// shown only when asked, as secrets are, and Generate fills one from the system's random source: a typed key tends to
+/// be weak.
+fn aes_keys(ui: &mut Ui, s: &mut System, number: u16) {
+    let muted = theme::palette(ui).muted;
+    group(ui, "Traffic keys");
+    let show_id = egui::Id::unique(("sys_show_aes", number));
+    let mut show = ui.data(|d| d.get_temp::<bool>(show_id)).unwrap_or(false);
+    ui.checkbox(&mut show, "Show AES keys");
+    ui.data_mut(|d| d.insert_temp(show_id, show));
+    let mut remove = None;
+    if !s.aes_keys.is_empty() {
+        egui::Grid::new(("sys_aes_keys", number)).num_columns(4).spacing([14.0, 9.0]).show(ui, |ui| {
+            ui.label("PI key ID");
+            ui.label("AES-256 key");
+            ui.label("");
+            ui.label("");
+            ui.end_row();
+            for (i, k) in s.aes_keys.iter_mut().enumerate() {
+                let n = i + 1;
+                let mut id = k.id;
+                num_field(ui, egui::Id::unique(("aes_id", number, i)), &mut id, 255, 70.0).accessible_name(format!("PI key ID, key {n}"));
+                k.id = id;
+                if show {
+                    let fid = egui::Id::unique(("aes_key", number, i));
+                    let (r, v) = checked_text(ui, fid, sys::key_hex_32(&k.key), 520.0, sys::parse_key_hex_32);
+                    r.accessible_name(format!("AES-256 key, key {n}"));
+                    if let Some(v) = v {
+                        k.key = v;
+                    }
+                } else {
+                    ui.label("Set");
+                }
+                if ui.button("Generate").on_hover_text("Fill the key with 64 random hexadecimal digits").clicked() {
+                    if let Some(new) = random_key() {
+                        k.key = new;
+                    }
+                }
+                if ui.button("Remove").clicked() {
+                    remove = Some(i);
+                }
+                ui.end_row();
+            }
+        });
+    }
+    if let Some(i) = remove {
+        s.aes_keys.remove(i);
+    }
+    let mut dup: Vec<u8> = Vec::new();
+    for (i, k) in s.aes_keys.iter().enumerate() {
+        if s.aes_keys[..i].iter().any(|o| o.id == k.id) && !dup.contains(&k.id) {
+            dup.push(k.id);
+        }
+    }
+    for id in dup {
+        ui.label(RichText::new(format!("PI key ID {id} is already used in this system.")).color(egui::Color32::from_rgb(200, 60, 60)));
+    }
+    let free = (0..=255u8).find(|id| !s.aes_keys.iter().any(|k| k.id == *id));
+    if ui.add_enabled(free.is_some() && s.aes_keys.len() < 256, egui::Button::new("Add AES-256 key")).clicked() {
+        if let Some(key) = random_key() {
+            s.aes_keys.push(AesKey { slot: None, id: free.unwrap_or(0), key, flags: 0 });
+        }
+    }
+    ui.label(
+        RichText::new("A channel picks the key it transmits with, by its PI key ID, from this list. A new key starts random. The keys never leave the radio's settings area except in a saved image, which asks first. Zone sharing can include the system record; the AES keys stay local.")
+            .size(13.0)
+            .color(muted),
+    );
+}
+
 /// What the recommended ham system dialog holds while it is open.
 #[derive(Clone)]
 struct HamDraft {
@@ -307,13 +385,14 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
             SYSTEM_P25_TRUNK => "P25 trunked".to_string(),
             SYSTEM_T3 => "DMR Tier III".to_string(),
             SYSTEM_NXDN => "NXDN conventional".to_string(),
+            SYSTEM_AES => "DMR AES-256".to_string(),
             t => format!("Type {t}"),
         });
         ui.end_row();
         let l = ui.label("Transmit side");
         let text = match (s.tx, matches!(&s.fields, SystemFields::P25Trunk(f) if f.no_reg)) {
             (false, _) => "Listen only",
-            (true, _) if matches!(s.type_id, SYSTEM_T3 | SYSTEM_NXDN) => "Transmit",
+            (true, _) if matches!(s.type_id, SYSTEM_T3 | SYSTEM_NXDN | SYSTEM_AES) => "Transmit",
             (true, false) => "Transmit and register",
             (true, true) => "Transmit without registering",
         };
@@ -326,7 +405,7 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
                 ui.selectable_value(
                     &mut choice,
                     2,
-                    if matches!(s.type_id, SYSTEM_T3 | SYSTEM_NXDN) { "Transmit" } else { "Transmit and register" },
+                    if matches!(s.type_id, SYSTEM_T3 | SYSTEM_NXDN | SYSTEM_AES) { "Transmit" } else { "Transmit and register" },
                 );
                 if s.type_id == SYSTEM_P25_TRUNK {
                     ui.selectable_value(&mut choice, 3, "Transmit without registering");
@@ -412,8 +491,19 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         t3_channels(ui, s, number);
     }
 
+    if let SystemFields::Aes { network } = &mut s.fields {
+        group(ui, "Identity");
+        egui::Grid::new(("sys_aes_net", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+            let l = ui.label("Network ID");
+            num_field(ui, egui::Id::unique(("sys_aes_network", number)), network, 255, 70.0).labelled_by(l.id);
+            ui.end_row();
+        });
+        ui.label(RichText::new("0 to 255. Two AES systems with the same network ID are the same system.").size(13.0).color(muted));
+    }
     if s.type_id == SYSTEM_NXDN {
         traffic_keys(ui, s, number);
+    } else if s.type_id == SYSTEM_AES {
+        aes_keys(ui, s, number);
     }
 
     group(ui, "Secret");
@@ -434,6 +524,8 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         ui.label(
             RichText::new(if s.type_id == SYSTEM_NXDN {
                 "No secret. The scrambler keys are the traffic keys above."
+            } else if s.type_id == SYSTEM_AES {
+                "No secret. The AES keys are the traffic keys above."
             } else {
                 "No secret. P25 trunked systems don't use one yet."
             })

@@ -37,6 +37,7 @@ pub const SHARE_WHOLE: u8 = 2;
 pub const SYSTEM_T3: u8 = 1;
 pub const SYSTEM_P25_TRUNK: u8 = 3;
 pub const SYSTEM_NXDN: u8 = 4;
+pub const SYSTEM_AES: u8 = 5;
 
 /// Traffic keys (channel-modes.md 5.4): key 0x1900 + n, 1024 of them. Only an NXDN conventional system has any this
 /// editor reads; the records of other types are kept as stored.
@@ -77,7 +78,74 @@ pub fn encode_traffic(system: u8, k: &TrafficKey) -> Vec<u8> {
 
 /// Whether a system type keeps traffic keys this editor reads.
 pub fn has_traffic(type_id: u8) -> bool {
-    type_id == SYSTEM_NXDN
+    matches!(type_id, SYSTEM_NXDN | SYSTEM_AES)
+}
+
+/// A traffic key's algorithm for DMR AES-256 voice, and the key's length (channel-modes.md 4: the PI header's ALG).
+pub const AES_ALG: u8 = 0x25;
+pub const AES_KEY_BYTES: usize = 32;
+const AES_RECORD: usize = 5 + AES_KEY_BYTES;
+
+/// An AES-256 traffic key of a DMR AES system. `slot` is the key (0x1900 up) it was read from, `None` for a new one. `id`
+/// is the eight-bit PI key ID the call carries.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AesKey {
+    pub slot: Option<u16>,
+    pub id: u8,
+    pub key: [u8; AES_KEY_BYTES],
+    pub flags: u8,
+}
+
+// A key is a secret: it never reaches a log or a failed assertion's output.
+impl std::fmt::Debug for AesKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AesKey {{ slot: {:?}, id: {}, key: <hidden>, flags: {} }}", self.slot, self.id, self.flags)
+    }
+}
+
+/// A 32-byte AES key as 64 hex digits.
+pub fn key_hex_32(k: &[u8; AES_KEY_BYTES]) -> String {
+    k.iter().map(|b| format!("{b:02X}")).collect()
+}
+
+/// An AES key from 64 hex digits (spaces and a 0x prefix are allowed), or `None`.
+pub fn parse_key_hex_32(text: &str) -> Option<[u8; AES_KEY_BYTES]> {
+    let t: String = text.trim().trim_start_matches("0x").chars().filter(|c| !c.is_whitespace()).collect();
+    if t.len() != 2 * AES_KEY_BYTES || !t.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; AES_KEY_BYTES];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&t[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// A traffic-key record's AES key (system, algorithm, key ID as a u16 whose high byte is 0, flags, 32 key bytes), or
+/// `None` when it is none this editor reads (kept as stored then).
+pub fn decode_aes_key(v: &[u8]) -> Option<AesKey> {
+    if v.len() != AES_RECORD || v[1] != AES_ALG || v[3] != 0 {
+        return None;
+    }
+    let mut key = [0u8; AES_KEY_BYTES];
+    key.copy_from_slice(&v[5..]);
+    Some(AesKey { slot: None, id: v[2], key, flags: v[4] })
+}
+
+/// A key's record for system `system` (0-based).
+pub fn encode_aes_key(system: u8, k: &AesKey) -> Vec<u8> {
+    let mut v = vec![system, AES_ALG, k.id, 0, k.flags];
+    v.extend_from_slice(&k.key);
+    v
+}
+
+/// A traffic-key record's owner-type check: is `v` a key this editor reads for a system of `type_id`?
+fn reads_traffic(type_id: u8, v: &[u8]) -> bool {
+    match type_id {
+        SYSTEM_NXDN => decode_traffic(v).is_some(),
+        SYSTEM_AES => decode_aes_key(v).is_some(),
+        _ => false,
+    }
 }
 
 pub fn type_name(t: u8) -> &'static str {
@@ -85,6 +153,7 @@ pub fn type_name(t: u8) -> &'static str {
         SYSTEM_T3 => "T3",
         SYSTEM_P25_TRUNK => "P25T",
         SYSTEM_NXDN => "NXDN",
+        SYSTEM_AES => "AES",
         _ => "?",
     }
 }
@@ -415,6 +484,8 @@ pub enum SystemFields {
     T3(T3System),
     /// An NXDN conventional system: an empty parameter block (nxdn-codeplug.md 3).
     Nxdn,
+    /// A DMR AES-256 system: one identity byte, the network (channel-modes.md 4).
+    Aes { network: u8 },
     Unknown,
 }
 
@@ -423,6 +494,7 @@ fn decode_fields(type_id: u8, block: &[u8]) -> SystemFields {
         SYSTEM_P25_TRUNK => SystemFields::P25Trunk(decode_p25_trunk(block)),
         SYSTEM_T3 => SystemFields::T3(decode_t3(block)),
         SYSTEM_NXDN => SystemFields::Nxdn,
+        SYSTEM_AES => SystemFields::Aes { network: block.first().copied().unwrap_or(1) },
         _ => SystemFields::Unknown,
     }
 }
@@ -432,6 +504,11 @@ fn encode_fields(f: &SystemFields, prev: Option<&[u8]>) -> Option<Vec<u8>> {
         SystemFields::P25Trunk(x) => Some(encode_p25_trunk(x, prev)),
         SystemFields::T3(x) => Some(encode_t3(x, prev)),
         SystemFields::Nxdn => Some(grow(prev, 0)),
+        SystemFields::Aes { network } => {
+            let mut v = grow(prev, 1);
+            v[0] = *network;
+            Some(v)
+        }
         SystemFields::Unknown => None,
     }
 }
@@ -442,6 +519,7 @@ fn id_len(type_id: u8) -> Option<u8> {
         SYSTEM_P25_TRUNK => Some(P25_ID_LEN),
         SYSTEM_T3 => Some(T3_ID_LEN),
         SYSTEM_NXDN => Some(0),
+        SYSTEM_AES => Some(1),
         _ => None,
     }
 }
@@ -457,6 +535,7 @@ pub fn new_fields(type_id: u8) -> SystemFields {
         SYSTEM_P25_TRUNK => SystemFields::P25Trunk(P25Trunk::default()),
         SYSTEM_T3 => SystemFields::T3(T3System::default()),
         SYSTEM_NXDN => SystemFields::Nxdn,
+        SYSTEM_AES => SystemFields::Aes { network: 1 },
         _ => SystemFields::Unknown,
     }
 }
@@ -614,6 +693,8 @@ pub struct System {
     pub entries: Vec<SysEntry>,
     /// The scrambler keys of an NXDN system (the keys of other types are kept as stored, unread).
     pub traffic_keys: Vec<TrafficKey>,
+    /// The AES-256 keys of a DMR AES system (the keys of other types are kept as stored, unread).
+    pub aes_keys: Vec<AesKey>,
     /// The system's own secret, as stored (never shown): `None` for none.
     pub secret: Option<Vec<u8>>,
     /// The record as read; empty for a system made here.
@@ -631,13 +712,14 @@ impl System {
             own_id: 0,
             // As the web editor makes them: a Tier III system is transmit-capable (a site grants every
             // transmission), a P25 trunked one listen only until the user turns the transmit side on.
-            tx: matches!(type_id, SYSTEM_T3 | SYSTEM_NXDN),
+            tx: matches!(type_id, SYSTEM_T3 | SYSTEM_NXDN | SYSTEM_AES),
             needs_key: false,
             flags_raw: 0,
             fallback: Fallback::None,
             fields: new_fields(type_id),
             entries: Vec::new(),
             traffic_keys: Vec::new(),
+            aes_keys: Vec::new(),
             secret: None,
             raw: Vec::new(),
         }
@@ -710,6 +792,7 @@ pub fn decode_systems(entries: &[Entry], channel_names: &HashMap<u16, String>) -
             fields: decode_fields(h.type_id, h.block),
             entries: Vec::new(),
             traffic_keys: Vec::new(),
+            aes_keys: Vec::new(),
             secret: kv::get_value(entries, SECRET_KEY + n as u16).map(<[u8]>::to_vec),
             raw: raw.to_vec(),
         });
@@ -717,7 +800,11 @@ pub fn decode_systems(entries: &[Entry], channel_names: &HashMap<u16, String>) -
     for e in entries.iter().filter(|e| (TRAFFIC_KEY..TRAFFIC_KEY + MAX_TRAFFIC as u16).contains(&e.key)) {
         let Some(&sys) = e.value.first() else { continue };
         if let Some(s) = systems.iter_mut().find(|s| s.number == u16::from(sys) + 1 && has_traffic(s.type_id)) {
-            if let Some(k) = decode_traffic(&e.value) {
+            if s.type_id == SYSTEM_AES {
+                if let Some(k) = decode_aes_key(&e.value) {
+                    s.aes_keys.push(AesKey { slot: Some(e.key), ..k });
+                }
+            } else if let Some(k) = decode_traffic(&e.value) {
                 s.traffic_keys.push(TrafficKey { slot: Some(e.key), ..k });
             }
         }
@@ -820,9 +907,13 @@ pub fn system_entries(
     // editor reads goes when its key is gone from the model or its system is.
     let mut pending: Vec<Vec<u8>> = Vec::new();
     for s in valid.iter().filter(|s| has_traffic(s.type_id)) {
-        for k in &s.traffic_keys {
-            let v = encode_traffic((s.number - 1) as u8, k);
-            match k.slot {
+        let keys: Vec<(Option<u16>, Vec<u8>)> = if s.type_id == SYSTEM_AES {
+            s.aes_keys.iter().map(|k| (k.slot, encode_aes_key((s.number - 1) as u8, k))).collect()
+        } else {
+            s.traffic_keys.iter().map(|k| (k.slot, encode_traffic((s.number - 1) as u8, k))).collect()
+        };
+        for (slot, v) in keys {
+            match slot {
                 Some(slot) => crate::modes::set(&mut out, slot, &v),
                 None => pending.push(v),
             }
@@ -831,13 +922,15 @@ pub fn system_entries(
     for e in stored.iter().filter(|e| (TRAFFIC_KEY..TRAFFIC_KEY + MAX_TRAFFIC as u16).contains(&e.key)) {
         let Some(&sys) = e.value.first() else { continue };
         let owner = kv::get_value(&stored, SYSTEM_KEY + u16::from(sys)).and_then(decode_header);
-        if !owner.is_some_and(|h| has_traffic(h.type_id)) {
+        if !owner.as_ref().is_some_and(|h| has_traffic(h.type_id)) {
             continue;
         }
         let s = valid.iter().find(|s| s.number == u16::from(sys) + 1);
-        if s.is_none_or(|s| s.raw.is_empty())
-            || (decode_traffic(&e.value).is_some() && !s.is_some_and(|s| s.traffic_keys.iter().any(|k| k.slot == Some(e.key))))
-        {
+        let owner_type = owner.as_ref().map_or(0, |h| h.type_id);
+        let kept = |s: &&System| {
+            s.traffic_keys.iter().any(|k| k.slot == Some(e.key)) || s.aes_keys.iter().any(|k| k.slot == Some(e.key))
+        };
+        if s.is_none_or(|s| s.raw.is_empty()) || (reads_traffic(owner_type, &e.value) && !s.is_some_and(kept)) {
             crate::modes::del(&mut out, e.key);
         }
     }

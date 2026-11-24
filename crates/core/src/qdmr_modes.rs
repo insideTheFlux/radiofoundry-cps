@@ -107,7 +107,8 @@ fn settings_of(f: &SystemFields) -> Option<Value> {
             ("sites", Value::flow(Value::List(x.sites.iter().map(|s| int(*s)).collect()))),
         ]),
         SystemFields::Nxdn => map(vec![]),
-        SystemFields::Unknown => return None,
+        // AES systems and channels stay out of a qdmr file: it carries no keys, and qdmr has no such mode
+        SystemFields::Aes { .. } | SystemFields::Unknown => return None,
     })
 }
 
@@ -183,7 +184,7 @@ fn params_of(p: &Params) -> Option<Value> {
         }
         Params::P25Trunk(x) => map(vec![("followAll", Value::Bool(x.follow_all))]),
         Params::T3 => map(vec![]),
-        Params::Unknown => return None,
+        Params::Aes(_) | Params::Unknown => return None,
     }))
 }
 

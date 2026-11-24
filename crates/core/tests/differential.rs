@@ -36,6 +36,7 @@ fn system_json(s: &rfcps_core::systems::System) -> Value {
             "planNoLearn": f.plan_no_learn, "planSplitHz": f.plan_split_hz, "leaveDbm": f.leave_dbm,
             "powerSave": f.power_save, "sites": f.sites}),
         SystemFields::Nxdn => json!({}),
+        SystemFields::Aes { network } => json!({"network": network}),
         SystemFields::Unknown => Value::Null,
     };
     let entries: Vec<Value> = s
@@ -100,6 +101,7 @@ fn dump(cp: &Codeplug) -> Value {
                 }
                 Params::P25Trunk(p) => json!({"followAll": p.follow_all}),
                 Params::T3 => json!({}),
+                Params::Aes(p) => json!({"id": p.key_id}),
                 Params::Unknown => Value::Null,
             });
             json!({

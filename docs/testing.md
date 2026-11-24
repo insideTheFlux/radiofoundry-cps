@@ -44,6 +44,8 @@ picking a tone, switching a signaling tone on, and the warning for an area of a 
 radio's own menu changed since the read is kept, a file without an area never erases the radio's keys, and an area of a
 newer version is never overwritten.
 
+DMR AES-256 channels and systems have their own tests (`crates/core/tests/aes.rs`): the bytes of a system, a key and a channel's tag equal what the web editor's `mode_aes.js` wrote for the same edits (the expected hex was made with `encode()` of a model with one AES system, one key and one channel), a decoded image re-encodes to the same bytes, keys come and go with their system and share the traffic-key family with NXDN's, a key record of another algorithm is kept, the keys count as secrets and are left out of an image saved without them, and the problems (no key, a key its system lacks, no system, another type of system, encryption on an amateur frequency) are listed; the GUI tests add an AES system and its keys (shown only when asked, Generate, unique PI key IDs) and make a channel AES with a system and a key. The differential test does not generate AES edits yet.
+
 Channel modes (P25 and NXDN conventional) are covered the same way: the GUI tests switch a channel's mode, edit its NAC,
 RAN, rate and squelch, flip RX Only (the tag's transmit flag), go back to FM, set the unit IDs and show a channel of a
 mode this editor doesn't edit; the link tests write a tagged channel (its record, then its tag), follow a rename, drop the

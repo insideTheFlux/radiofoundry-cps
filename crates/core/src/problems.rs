@@ -364,6 +364,16 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                     add(warn, Table::Channels, n, name, "The talk group is above 65535: the channel calls talk group 1.".into());
                 }
             }
+            Params::Aes(p) => {
+                if target.is_some_and(|k| k.call_type == CallType::Private && k.id > 0xFF_FFFF) {
+                    add(warn, Table::Channels, n, name, "The unit ID is above 16777215: the channel calls group 1.".into());
+                }
+                // A missing key inhibits PTT (channel-modes.md 4): none picked, or one its system doesn't hold.
+                let sys = (t.system != 0xFF).then(|| cp.systems.iter().find(|s| s.number == u16::from(t.system) + 1)).flatten();
+                if !p.key_id.is_some_and(|id| sys.is_some_and(|s| s.aes_keys.iter().any(|k| k.id == id))) {
+                    add(warn, Table::Channels, n, name, "The channel's AES key is missing or not one of its system's keys: the channel can't use AES.".into());
+                }
+            }
             // A Tier III channel has no parameters to check.
             Params::T3 => {}
             Params::Unknown => {
@@ -381,6 +391,7 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
             crate::modes::KIND_P25_TRUNK => Some(systems::SYSTEM_P25_TRUNK),
             crate::modes::KIND_T3 => Some(1),
             crate::modes::KIND_NXDN => Some(systems::SYSTEM_NXDN),
+            crate::modes::KIND_AES => Some(systems::SYSTEM_AES),
             _ => None,
         };
         if let Some(want) = want {
@@ -404,6 +415,20 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
                     add(err, Table::Channels, n, name, "The transmit key is not one of the channel's system's keys.".into());
                 }
             }
+        }
+        // Encrypted or scrambled voice on an amateur frequency (user guide, Encryption on amateur frequencies): a warning,
+        // nothing is blocked. A channel that may not transmit gets none.
+        let encrypts = match &t.params {
+            Params::Aes(p) => p.key_id.is_some(),
+            Params::Nxdn(p) => p.tx_key_id.is_some(),
+            _ => false,
+        };
+        let system_tx = (t.system != 0xFF)
+            .then(|| cp.systems.iter().find(|s| s.number == u16::from(t.system) + 1))
+            .flatten()
+            .is_none_or(|s| s.tx);
+        if encrypts && t.tx && system_tx && amateur_freq(c.tx_hz) {
+            add(warn, Table::Channels, n, name, "This channel transmits encrypted or scrambled voice on an amateur frequency. Most countries, including the US, do not allow encrypted messages on amateur bands.".into());
         }
         match &t.fallback {
             Fallback::Stale(k) => add(warn, Table::Channels, n, name, format!("The fallback channel {k} is gone or renamed: the system's fallback is used.")),
@@ -632,6 +657,13 @@ pub fn validate(cp: &Codeplug, bands: Option<&[(u64, u64)]>) -> Vec<Problem> {
         }
     }
     out
+}
+
+/// The common amateur 2 m, 1.25 m and 70 cm allocations in Hz, edges included (RadioFoundry's `AMATEUR_HZ`).
+const AMATEUR_HZ: [(u64, u64); 3] = [(144_000_000, 148_000_000), (222_000_000, 225_000_000), (420_000_000, 450_000_000)];
+
+fn amateur_freq(hz: u64) -> bool {
+    AMATEUR_HZ.iter().any(|&(lo, hi)| hz >= lo && hz <= hi)
 }
 
 fn band_name(b: ListenBand) -> &'static str {

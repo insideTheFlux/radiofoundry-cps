@@ -32,6 +32,7 @@ pub const KIND_T3: u8 = 1;
 pub const KIND_P25: u8 = 2;
 pub const KIND_P25_TRUNK: u8 = 3;
 pub const KIND_NXDN: u8 = 4;
+pub const KIND_AES: u8 = 5;
 
 /// The short name of a kind as the radio shows it; "?" for one this editor doesn't know.
 pub fn kind_name(kind: u8) -> &'static str {
@@ -40,12 +41,13 @@ pub fn kind_name(kind: u8) -> &'static str {
         KIND_P25 => "P25",
         KIND_P25_TRUNK => "P25T",
         KIND_NXDN => "NXDN",
+        KIND_AES => "AES",
         _ => "?",
     }
 }
 
 /// Kinds a new channel can be made in this editor.
-pub const EDITABLE_KINDS: [u8; 4] = [KIND_P25, KIND_NXDN, KIND_P25_TRUNK, KIND_T3];
+pub const EDITABLE_KINDS: [u8; 5] = [KIND_P25, KIND_NXDN, KIND_P25_TRUNK, KIND_T3, KIND_AES];
 
 // --- Bytes ---
 
@@ -276,11 +278,30 @@ pub fn encode_nxdn(p: &NxdnConv, prev: Option<&[u8]>) -> Vec<u8> {
     v
 }
 
+/// A conventional DMR AES-256 channel (channel-modes.md 4): the PI key ID it transmits with, from its system's keys;
+/// `None` sends no AES at all. Its block is the algorithm (0x25) and the ID.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct AesChan {
+    pub key_id: Option<u8>,
+}
+
+pub fn decode_aes(b: &[u8]) -> AesChan {
+    AesChan { key_id: (b.len() >= 2 && b[0] == systems::AES_ALG).then(|| b[1]) }
+}
+
+pub fn encode_aes(p: &AesChan, prev: Option<&[u8]>) -> Vec<u8> {
+    let mut v = grow(prev, 2);
+    v[0] = if p.key_id.is_some() { systems::AES_ALG } else { 0 };
+    v[1] = p.key_id.unwrap_or(0);
+    v
+}
+
 /// A channel's mode parameters: the module's fields for a kind this editor knows, else the block as stored (kept).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Params {
     P25(P25Conv),
     Nxdn(NxdnConv),
+    Aes(AesChan),
     /// A P25 trunked channel (p25-codeplug.md 4): follow every group of the system.
     P25Trunk(P25TrunkChan),
     /// A Tier III channel (dmr-trunking-codeplug.md 4): no parameter block, so the block as stored is kept.
@@ -300,6 +321,7 @@ pub fn decode_params(kind: u8, block: &[u8]) -> Params {
     match kind {
         KIND_P25 => Params::P25(decode_p25(block)),
         KIND_NXDN => Params::Nxdn(decode_nxdn(block)),
+        KIND_AES => Params::Aes(decode_aes(block)),
         KIND_P25_TRUNK => Params::P25Trunk(P25TrunkChan { follow_all: u8_at(block, 0) & 1 != 0 }),
         KIND_T3 => Params::T3,
         _ => Params::Unknown,
@@ -311,6 +333,7 @@ fn encode_params(p: &Params, prev: Option<&[u8]>) -> Option<Vec<u8>> {
     match p {
         Params::P25(x) => Some(encode_p25(x, prev)),
         Params::Nxdn(x) => Some(encode_nxdn(x, prev)),
+        Params::Aes(x) => Some(encode_aes(x, prev)),
         Params::P25Trunk(x) => {
             let mut v = grow(prev, 1);
             v[0] = (v[0] & !1) | u8::from(x.follow_all);
@@ -327,6 +350,7 @@ pub fn new_params(kind: u8) -> Params {
     match kind {
         KIND_P25 => Params::P25(P25Conv::default()),
         KIND_NXDN => Params::Nxdn(NxdnConv::default()),
+        KIND_AES => Params::Aes(AesChan::default()),
         KIND_P25_TRUNK => Params::P25Trunk(P25TrunkChan::default()),
         KIND_T3 => Params::T3,
         _ => Params::Unknown,
@@ -409,7 +433,7 @@ pub fn stand_in(c: &mut Channel, systems: &[System]) {
 /// Whether a kind keeps its own frequencies in the record: the conventional kinds do; one that follows a system
 /// takes the system's control channel's.
 pub fn own_freqs(kind: u8) -> bool {
-    matches!(kind, KIND_P25 | KIND_NXDN)
+    matches!(kind, KIND_P25 | KIND_NXDN | KIND_AES)
 }
 
 /// Channel `c` made of `kind` (0: plain, in `mode`). Fields of the kind it had are dropped; transmit allowed carries
@@ -433,6 +457,7 @@ pub fn set_kind(c: &mut Channel, kind: u8, mode: Mode, systems: &[System]) {
     let want = match kind {
         KIND_P25_TRUNK => Some(systems::SYSTEM_P25_TRUNK),
         KIND_T3 => Some(systems::SYSTEM_T3),
+        KIND_AES => Some(systems::SYSTEM_AES),
         _ => None,
     };
     let system = want
@@ -443,7 +468,7 @@ pub fn set_kind(c: &mut Channel, kind: u8, mode: Mode, systems: &[System]) {
         system,
         // Transmit allowed starts as the channel's own where the kind transmits by default (a Tier III site grants
         // every transmission); a P25 trunked channel starts receive only.
-        tx: matches!(kind, KIND_P25 | KIND_NXDN | KIND_T3) && tx,
+        tx: matches!(kind, KIND_P25 | KIND_NXDN | KIND_T3 | KIND_AES) && tx,
         base_own: false,
         fallback: Fallback::None,
         no_fallback: false,
