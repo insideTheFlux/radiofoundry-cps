@@ -218,6 +218,7 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                                 &mut c.rx_tone,
                                 70.0,
                                 format!("RX tone, channel {number}"),
+                                false,
                             );
                         });
                         row.col(|ui| {
@@ -231,6 +232,7 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                                 &mut c.tx_tone,
                                 70.0,
                                 format!("TX tone, channel {number}"),
+                                false,
                             );
                         });
                         row.col(|ui| {
@@ -360,39 +362,50 @@ fn blank_cell(ui: &mut Ui, width: f32, name: String) {
     ui.add_enabled(false, egui::TextEdit::singleline(&mut String::new()).desired_width(width)).accessible_name(name);
 }
 
-/// A tone field; true when it took focus.
-fn tone_field(ui: &mut Ui, id: egui::Id, value: &mut String, width: f32, name: String) -> bool {
-    let (r, v) = checked_text(ui, id, value.clone(), width, parse_tone);
-    let r = r.accessible_name(name.clone());
-    let mut hit = r.gained_focus();
-    if let Some(v) = v {
-        *value = v;
-    }
-    // The standard tones as a searchable list (any other valid tone can still be typed)
-    let filter_id = id.with("tone_filter");
-    let menu = ui.menu_button("…", |ui| {
-        let mut filter = ui.data(|d| d.get_temp::<String>(filter_id)).unwrap_or_default();
-        let r = ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search").desired_width(110.0)).accessible_name("Search tones");
-        r.request_focus();
-        ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
-        let f = filter.trim().to_uppercase();
-        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-            if f.is_empty() && ui.selectable_label(value.is_empty(), "None").clicked() {
-                value.clear();
-                ui.close();
-            }
-            for t in rfcps_core::fields::standard_tones() {
-                if (f.is_empty() || t.contains(&f)) && ui.selectable_label(*value == t, &t).clicked() {
-                    *value = t;
+/// A tone field; true when it took focus. `list`: the "…" button beside it, a searchable list of the standard tones. The
+/// field and the button are one cell of a grid (a second widget would be taken for the next cell), and the table has
+/// no room for the button: a tone is picked from the list in the channel's form.
+fn tone_field(ui: &mut Ui, id: egui::Id, value: &mut String, width: f32, name: String, list: bool) -> bool {
+    ui.horizontal(|ui| {
+        let (r, v) = checked_text(ui, id, value.clone(), width, parse_tone);
+        let r = r.accessible_name(name.clone());
+        let mut hit = r.gained_focus();
+        if let Some(v) = v {
+            *value = v;
+        }
+        if !list {
+            return hit;
+        }
+        let filter_id = id.with("tone_filter");
+        let menu = ui.menu_button("…", |ui| {
+            let mut filter = ui.data(|d| d.get_temp::<String>(filter_id)).unwrap_or_default();
+            let r = ui
+                .add(egui::TextEdit::singleline(&mut filter).hint_text("Search").desired_width(110.0))
+                .accessible_name("Search tones");
+            r.request_focus();
+            ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+            let f = filter.trim().to_uppercase();
+            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                if f.is_empty() && ui.selectable_label(value.is_empty(), "None").clicked() {
+                    value.clear();
                     ui.close();
                 }
-            }
+                for t in rfcps_core::fields::standard_tones() {
+                    if (f.is_empty() || t.contains(&f)) && ui.selectable_label(*value == t, &t).clicked() {
+                        *value = t;
+                        ui.close();
+                    }
+                }
+            });
         });
-    });
-    let clicked = menu.response.clicked();
-    menu.response.on_hover_text("Standard CTCSS and DCS tones").accessible_name(format!("Tones, {}", name.to_lowercase()));
-    hit |= clicked;
-    hit
+        let clicked = menu.response.clicked();
+        menu.response
+            .on_hover_text("Standard CTCSS and DCS tones")
+            .accessible_name(format!("Tones, {}", name.to_lowercase()));
+        hit |= clicked;
+        hit
+    })
+    .inner
 }
 
 fn group(ui: &mut Ui, title: &str) {
@@ -557,6 +570,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                     &mut c.rx_tone,
                     100.0,
                     format!("RX tone, channel {number}"),
+                    true,
                 );
                 ui.end_row();
                 ui.label("TX Tone");
@@ -567,6 +581,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                         &mut c.tx_tone,
                         100.0,
                         format!("TX tone, channel {number}"),
+                        true,
                     )
                 });
                 ui.end_row();

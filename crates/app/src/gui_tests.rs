@@ -1200,8 +1200,9 @@ fn a_tx_frequency_in_a_receive_only_band_stays_open_to_be_corrected() {
 #[test]
 fn a_tone_is_picked_from_the_standard_list_and_searched() {
     let mut h = harness_with_channel(|_| {});
-    // the table's cell and the form's field share a name: the form's is the last
-    h.get_all_by_label("Tones, tx tone, channel 1").last().unwrap().click();
+    // only the form has the list button: the table has no room for it
+    assert_eq!(h.get_all_by_label("Tones, tx tone, channel 1").count(), 1);
+    h.get_by_label("Tones, tx tone, channel 1").click();
     h.step();
     h.run();
     // the list is searchable: D023I is the second entry of the codes

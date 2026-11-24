@@ -445,7 +445,7 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         ui.end_row();
     });
     ui.label(
-        RichText::new("Listen only: the radio never registers or transmits on the system, whatever a channel says. A new P25 trunked system is listen only; a new Tier III system can transmit, as in the web editor. An empty ID uses the radio's own.")
+        RichText::new("Listen only: the radio never registers or transmits on the system, whatever a channel says. A new P25 trunked system is listen only; a new Tier III, NXDN or AES system can transmit, as in the web editor. An empty ID uses the radio's own.")
             .size(13.0)
             .color(muted),
     );
