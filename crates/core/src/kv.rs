@@ -806,6 +806,27 @@ mod tests {
     }
 
     #[test]
+    fn a_file_written_over_a_radio_sends_its_own_tags_and_systems() {
+        // A file that was opened, not read from this radio, is written with the radio's own area as the base (the
+        // write flow reads it fresh), so every key the file differs in goes across: its channel tags and systems
+        // (RadioFoundry #980: the web editor once used the file's own bytes as the base and sent the radio's area).
+        let radio = with(&[e(1, &[6, 0, 0, 0]), e(0x0400, &[1, 9]), e(0x0402, &[2, 8])]);
+        let mut file = with(&[e(1, &[6, 0, 0, 0]), e(0x0400, &[3, 7]), e(0x0A00, &[4, 4, 4])]);
+        let want = decode_area(&file).entries;
+        area_for_write(&mut file, &radio[KV_ADDR..KV_ADDR + KV_SIZE], &sec(&radio)).unwrap();
+        let got = decode_area(&file).entries;
+        for key in [1, 0x0400, 0x0A00] {
+            assert_eq!(get_value(&got, key), get_value(&want, key), "key {key:#x}");
+        }
+        assert!(get_value(&got, 0x0402).is_none(), "a tag only the radio held goes");
+        // the same file as its own base: the radio's area stays and the file's tags are lost
+        let mut file = with(&[e(1, &[6, 0, 0, 0]), e(0x0400, &[3, 7])]);
+        let base = sec(&file);
+        area_for_write(&mut file, &radio[KV_ADDR..KV_ADDR + KV_SIZE], &base).unwrap();
+        assert_eq!(sec(&file), sec(&radio));
+    }
+
+    #[test]
     fn secrets_are_counted_and_taken_out_and_the_rest_stays() {
         let mut b = with(&[e(0x0100, &[1]), e(0x0300, &[9; 19]), e(0x0001, &[5, 0, 0, 0]), e(0x1900, &[7; 6]), e(0x0400, &[2])]);
         assert_eq!(count_secrets(&b), 2);
