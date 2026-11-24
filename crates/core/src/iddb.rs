@@ -340,6 +340,32 @@ pub fn convert(image: &mut Image, format: u8, end: usize) -> Option<Written> {
     write(image, &records, Options { format, text_len, end, fresh: true }).ok()
 }
 
+/// A database header this editor can't parse: the tag is there, but not a format, record size or count `read_header`
+/// takes. It can't be read or rebuilt, only removed (RadioFoundry's web editor offers the same).
+pub fn unreadable(b: &[u8]) -> bool {
+    b.get(AREA1..AREA1 + 2) == Some(&[0x49, 0x64]) && read_header(b).is_none()
+}
+
+/// How many bytes the database reaches past `end` (the radio's image end), or `None` when it fits or there is none.
+pub fn overflow(b: &[u8], end: usize) -> Option<usize> {
+    let top = extent(b);
+    (top > end).then(|| top - end)
+}
+
+/// The database cut to the records that fit before `end`, in its own format, each text as long as the longest needs
+/// (as `convert` does). `None` when there is no database, it fits already, or `read` can't give its records back
+/// (format n, other programs' formats): those can only be removed.
+pub fn fit(image: &mut Image, end: usize) -> Option<Written> {
+    let h = read_header(image.bytes())?;
+    if (h.format != b'N' && h.format != b'C') || extent(image.bytes()) <= end {
+        return None;
+    }
+    let records = read(image.bytes());
+    let longest = records.iter().map(|r| r.text.chars().count()).max().unwrap_or(0);
+    let text_len = TEXT_LENGTHS.iter().copied().find(|&n| n >= longest).unwrap_or(TEXT_MAX);
+    write(image, &records, Options { format: h.format, text_len, end, fresh: true }).ok()
+}
+
 /// The image address a write of the database must reach: its extent, or just the header when there is none (an erased
 /// database).
 pub fn end(b: &[u8]) -> usize {
@@ -409,6 +435,55 @@ mod tests {
         let mut img = Image::blank();
         let w = write_n(&mut img, &list, 16, AREA2 + 2 * 15).unwrap();
         assert_eq!((w.count, w.dropped), (per1 + 2, 3));
+    }
+
+    #[test]
+    fn a_header_that_cannot_be_parsed_is_unreadable_and_erase_clears_it() {
+        let mut img = Image::blank();
+        assert!(!unreadable(img.bytes()), "no database");
+        // the tag, a format letter, a record size below the minimum, a count
+        img.bytes_mut()[AREA1..AREA1 + 12].copy_from_slice(&[0x49, 0x64, b'N', 0x30, 0x30, 0x30, 0x31, 0, 5, 0, 0, 0]);
+        assert!(read_header(img.bytes()).is_none() && unreadable(img.bytes()));
+        erase(&mut img);
+        assert!(!unreadable(img.bytes()));
+        write_n(&mut img, &[rec(1, "A")], 16, usize::MAX).unwrap();
+        assert!(!unreadable(img.bytes()), "a valid database");
+    }
+
+    #[test]
+    fn a_database_past_the_radios_end_is_cut_to_fit() {
+        let per1 = (AREA1_SIZE - HEADER) / 15;
+        let list: Vec<Record> = (1..=per1 as u32 + 100).map(|i| rec(i, "Ann")).collect();
+        let mut img = Image::blank();
+        write_n(&mut img, &list, 16, usize::MAX).unwrap();
+        let end = AREA2 + 40 * 15;
+        assert_eq!(overflow(img.bytes(), end), Some(60 * 15));
+        assert_eq!(overflow(img.bytes(), usize::MAX), None);
+        let w = fit(&mut img, end).unwrap();
+        assert_eq!((w.count, w.dropped), (per1 + 40, 60));
+        assert!(extent(img.bytes()) <= end && overflow(img.bytes(), end).is_none());
+        let back = read(img.bytes());
+        assert_eq!((back.len(), back[0].id, back[per1 + 39].id), (per1 + 40, 1, per1 as u32 + 40));
+        assert_eq!(back[0].text, "Ann");
+        // it fits now: nothing more to cut; no database: nothing to cut
+        assert!(fit(&mut img, end).is_none());
+        assert!(fit(&mut Image::blank(), 0).is_none());
+    }
+
+    #[test]
+    fn a_compact_database_past_the_end_is_cut_in_its_own_format() {
+        let list: Vec<Record> = (1..=90_000u32).map(|i| rec(i, &format!("Ann Smith {i}"))).collect();
+        let mut img = Image::blank();
+        write(&mut img, &list, Options { format: b'C', text_len: 32, end: usize::MAX, fresh: true }).unwrap();
+        let top = extent(img.bytes());
+        // area 1 always holds 256 KB; only what runs on into area 2 can pass the radio's end
+        assert!(top > AREA2, "{top:#x}");
+        let end = AREA2 + (top - AREA2) / 2;
+        assert!(overflow(img.bytes(), end).is_some());
+        let w = fit(&mut img, end).unwrap();
+        assert!(w.count > 0 && w.count < 90_000, "{w:?} top {top:#x} end {end:#x}");
+        assert_eq!(read_header(img.bytes()).unwrap().format, b'C');
+        assert!(extent(img.bytes()) <= end);
     }
 
     #[test]

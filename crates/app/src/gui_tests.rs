@@ -157,6 +157,69 @@ fn the_id_database_is_built_from_a_user_file_and_undone() {
     assert_eq!(h.state().doc.as_ref().unwrap().cp.iddb.as_ref().map(|x| x.count), Some(3));
 }
 
+/// A database of `n` short records in format N (16 characters each), in the open codeplug's image.
+fn with_database(app: &mut App, n: u32) {
+    let recs: Vec<rfcps_core::iddb::Record> = (1..=n).map(|i| rfcps_core::iddb::Record { id: i, text: "Ann".into() }).collect();
+    let doc = app.doc.as_mut().unwrap();
+    doc.change_iddb(|img| rfcps_core::iddb::write_n(img, &recs, 16, usize::MAX)).unwrap();
+}
+
+#[test]
+fn a_database_too_big_for_the_radio_is_flagged_and_cut_to_fit() {
+    use rfcps_core::iddb;
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    // area 1 holds `per1` records of this size; 60 more run on into area 2
+    let per1 = ((iddb::AREA1_SIZE - iddb::HEADER) / 15) as u32;
+    with_database(&mut app, per1 + 60);
+    let end = iddb::AREA2 + 20 * 15;
+    app.radio_facts = worker::RadioFacts { compact: Some(false), end: Some(end) };
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    h.get_by_label_contains("This database is too big for the radio");
+    click(&mut h, "Cut to fit");
+    h.get_by_label_contains(&format!("The ID database was cut to {} records", per1 + 20));
+    let d = h.state().doc.as_ref().unwrap();
+    assert!(iddb::overflow(d.base.bytes(), end).is_none());
+    assert_eq!(d.cp.iddb.as_ref().map(|x| x.count), Some(per1 + 20));
+    // the cut is one undo step
+    click(&mut h, "Undo");
+    assert_eq!(h.state().doc.as_ref().unwrap().cp.iddb.as_ref().map(|x| x.count), Some(per1 + 60));
+}
+
+#[test]
+fn a_database_that_fits_or_a_radio_that_did_not_say_gets_no_warning() {
+    use rfcps_core::iddb;
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    let per1 = ((iddb::AREA1_SIZE - iddb::HEADER) / 15) as u32;
+    with_database(&mut app, per1 + 60);
+    // the radio's end is not known: nothing to compare with
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    assert!(h.query_by_label_contains("too big for the radio").is_none());
+    h.state_mut().radio_facts = worker::RadioFacts { compact: Some(false), end: Some(iddb::AREA2 + 100 * 15) };
+    h.run();
+    assert!(h.query_by_label_contains("too big for the radio").is_none());
+}
+
+#[test]
+fn a_database_header_the_editor_cannot_parse_is_shown_and_removable() {
+    use rfcps_core::iddb;
+    let mut app = App::with_ports(Vec::new());
+    app.new_codeplug();
+    // the tag and format letter, a record size below the minimum, a count: not a header read_header takes
+    let doc = app.doc.as_mut().unwrap();
+    doc.change_iddb(|img| img.bytes_mut()[iddb::AREA1..iddb::AREA1 + 12].copy_from_slice(&[0x49, 0x64, b'N', 0x30, 0x30, 0x30, 0x31, 0, 5, 0, 0, 0]));
+    let mut h = tall(app);
+    click_prefix(&mut h, "ID Database");
+    h.get_by_label_contains("an ID database this editor can't read or rebuild");
+    click(&mut h, "Remove ID Database");
+    click(&mut h, "Remove");
+    assert!(!iddb::unreadable(h.state().doc.as_ref().unwrap().base.bytes()));
+    h.get_by_label("The codeplug has no DMR ID database.");
+}
+
 #[test]
 fn users_become_private_contacts_once() {
     let mut app = App::with_ports(Vec::new());

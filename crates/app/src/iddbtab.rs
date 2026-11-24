@@ -458,7 +458,7 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_max_width(760.0);
         // The current database
-        match &doc.cp.iddb {
+        match doc.cp.iddb.clone() {
             Some(h) => {
                 let n = h.count;
                 let (what, each) = if h.format == b'C' { ("a compact DMR ID database", "up to") } else { ("a DMR ID database", "") };
@@ -474,12 +474,39 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, st: &mut IdDbUi, facts: RadioFacts) {
                         }
                     });
                 }
+                // a database reaching past the radio's image end: a write would stop with an error, so say so here
+                if let Some(over) = facts.end.and_then(|end| iddb::overflow(doc.base.bytes(), end)) {
+                    let cut = h.format == b'N' || h.format == b'C';
+                    ui.horizontal_wrapped(|ui| {
+                        ui.colored_label(
+                            pal.warn,
+                            format!(
+                                "This database is too big for the radio: it reaches {} KB past the end of its image, so Write to Radio would stop.{}",
+                                over.div_ceil(1024),
+                                if cut { "" } else { " Only removing it is possible in this format." }
+                            ),
+                        );
+                        if cut && ui.button("Cut to fit").clicked() {
+                            let end = facts.end.unwrap_or(usize::MAX);
+                            let w = doc.change_iddb(|img| iddb::fit(img, end));
+                            st.message = w.map(|w| (format!("The ID database was cut to {} records, the most that fit. Write to Radio sends it.", w.count), false));
+                        }
+                    });
+                }
                 if ui.button("Remove ID Database").clicked() {
                     st.confirm = Some(Confirm::Remove);
                 }
             }
             None => {
-                ui.label("The codeplug has no DMR ID database.");
+                // a header this editor can't parse: shown and removable, so a valid database can take its place
+                if iddb::unreadable(doc.base.bytes()) {
+                    ui.colored_label(pal.warn, "The codeplug holds an ID database this editor can't read or rebuild. It can only be removed, and a new one built in its place.");
+                    if ui.button("Remove ID Database").clicked() {
+                        st.confirm = Some(Confirm::Remove);
+                    }
+                } else {
+                    ui.label("The codeplug has no DMR ID database.");
+                }
             }
         }
         if doc.iddb_pending {
