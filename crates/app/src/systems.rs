@@ -244,7 +244,13 @@ fn aes_keys(ui: &mut Ui, s: &mut System, number: u16) {
                 k.id = id;
                 if show {
                     let fid = egui::Id::unique(("aes_key", number, i));
-                    let (r, v) = checked_text(ui, fid, sys::key_hex_32(&k.key), 520.0, sys::parse_key_hex_32);
+                    // A grid cell is as wide as the widest thing the column held the frame before, which is its heading:
+                    // the box is given its width, so the 64 digits show whole
+                    let (r, v) = ui
+                        .allocate_ui_with_layout(egui::vec2(560.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            checked_text(ui, fid, sys::key_hex_32(&k.key), 540.0, sys::parse_key_hex_32)
+                        })
+                        .inner;
                     r.accessible_name(format!("AES-256 key, key {n}"));
                     if let Some(v) = v {
                         k.key = v;
