@@ -1156,7 +1156,7 @@ fn an_rx_only_channel_grays_its_transmit_fields_and_keeps_their_values() {
         let text = |l: &str| h.get_by_role_and_label(Role::TextInput, l).accesskit_node().is_disabled();
         (
             text("TX MHz"),
-            text("TX Timeout (s)"),
+            h.get_by_role_and_label(Role::ComboBox, "TX Timeout (s)").accesskit_node().is_disabled(),
             // the table has a cell of the same name: the form's is the last
             h.get_all_by_role_and_label(Role::TextInput, "TX tone, channel 1").last().unwrap().accesskit_node().is_disabled(),
             h.get_by_role_and_label(Role::ComboBox, "Power").accesskit_node().is_disabled(),
@@ -1191,7 +1191,7 @@ fn a_tx_frequency_in_a_receive_only_band_stays_open_to_be_corrected() {
     });
     assert!(channel(&h).rx_only);
     assert!(!h.get_by_role_and_label(Role::TextInput, "TX MHz").accesskit_node().is_disabled());
-    assert!(h.get_by_role_and_label(Role::TextInput, "TX Timeout (s)").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(Role::ComboBox, "TX Timeout (s)").accesskit_node().is_disabled());
     // the RX in the air band: TX is locked
     retype(&mut h, "RX MHz", "118.0");
     assert!(h.get_by_role_and_label(Role::TextInput, "TX MHz").accesskit_node().is_disabled());
@@ -1216,6 +1216,31 @@ fn a_tone_is_picked_from_the_standard_list_and_searched() {
     h.get_all_by_role_and_label(Role::TextInput, "TX tone, channel 1").last().unwrap().type_text("100");
     h.run();
     assert_eq!(channel(&h).tx_tone, "100.0");
+}
+
+#[test]
+fn the_tx_timeout_is_a_list_of_the_radio_default_and_15_second_steps() {
+    let mut h = harness_with_channel(|_| {});
+    assert_eq!(channel(&h).tot, 0);
+    pick(&mut h, "TX Timeout (s)", "1:30 (90 s)");
+    assert_eq!(channel(&h).tot, 90);
+    pick(&mut h, "TX Timeout (s)", "45 s");
+    assert_eq!(channel(&h).tot, 45);
+    pick(&mut h, "TX Timeout (s)", "Radio default");
+    assert_eq!(channel(&h).tot, 0);
+}
+
+#[test]
+fn a_refused_tx_frequency_says_why() {
+    let mut h = harness_with_channel(|_| {});
+    let before = channel(&h).tx_hz;
+    retype(&mut h, "TX MHz", "121.5");
+    assert_eq!(channel(&h).tx_hz, before);
+    h.get_by_label_contains("121.500 MHz is not a supported transmit frequency.");
+    // a usable one does not
+    retype(&mut h, "TX MHz", "146.94");
+    assert_eq!(channel(&h).tx_hz, 146_940_000);
+    assert!(h.query_by_label_contains("not a supported transmit frequency").is_none());
 }
 
 #[test]

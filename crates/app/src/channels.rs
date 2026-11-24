@@ -6,7 +6,7 @@
 //! (the layout of the web editor's channel form).
 
 use crate::theme;
-use crate::widgets::{checked_text, freq_edit, name_edit, tx_freq_edit};
+use crate::widgets::{checked_text, freq_edit, name_edit, tx_freq_edit, tx_refusal};
 use eframe::egui::{self, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
 use rfcps_core::fields::parse_tone;
@@ -187,7 +187,11 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                                 c.rx_hz,
                                 listen_band(c.rx_hz).is_none(),
                             );
-                            let r = r.accessible_name(format!("TX MHz, channel {number}"));
+                            let id = ui.scope_id().with(("tx_hz", number));
+                            let mut r = r.accessible_name(format!("TX MHz, channel {number}"));
+                            if let Some(why) = tx_refusal(ui, id, c.tx_hz, c.rx_hz) {
+                                r = r.on_hover_text(why);
+                            }
                             hit |= r.gained_focus();
                             if let Some(v) = v {
                                 set_tx(c, v);
@@ -329,6 +333,15 @@ fn contact_combo(
         .response
 }
 
+/// A TX timeout as the list shows it: the radio's default, seconds, or minutes and seconds.
+fn tot_text(secs: u16) -> String {
+    match secs {
+        0 => "Radio default".to_string(),
+        s if s < 60 => format!("{s} s"),
+        s => format!("{}:{:02} ({s} s)", s / 60, s % 60),
+    }
+}
+
 /// The channel may not transmit: RX Only, which a channel with its RX in the air band or broadcast FM always is (TX
 /// follows RX there). The transmit fields are then grayed and locked; their values are kept and show again when RX Only
 /// is cleared (RadioFoundry #946).
@@ -406,6 +419,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
     ui.label(RichText::new(format!("Channel {number}")).heading());
 
     group(ui, "Channel");
+    let mut tx_why: Option<String> = None;
     egui::Grid::new(("basic", number))
         .num_columns(2)
         .spacing([14.0, 9.0])
@@ -429,20 +443,19 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             }
             ui.end_row();
             let l = ui.label("TX MHz");
-            let (r, v) = tx_freq_edit(
-                ui,
-                egui::Id::unique(("d_tx", number)),
-                c.tx_hz,
-                c.rx_hz,
-                !tx_freq_locked(c) && own,
-            );
+            let tx_id = egui::Id::unique(("d_tx", number));
+            let (r, v) = tx_freq_edit(ui, tx_id, c.tx_hz, c.rx_hz, !tx_freq_locked(c) && own);
             r.labelled_by(l.id);
+            tx_why = tx_refusal(ui, tx_id, c.tx_hz, c.rx_hz);
             if let Some(v) = v {
                 set_tx(c, v);
             }
             ui.end_row();
         });
     let p = theme::palette(ui);
+    if let Some(why) = tx_why {
+        ui.colored_label(egui::Color32::from_rgb(200, 60, 60), format!("{why} The channel keeps its TX frequency."));
+    }
     if listen.is_some() {
         ui.label(
             RichText::new("Listen-only band: the radio receives here, and TX follows RX.")
@@ -476,33 +489,22 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
         .spacing([14.0, 9.0])
         .show(ui, |ui| {
             let l = ui.label("TX Timeout (s)");
-            let id = egui::Id::unique(("d_tot", number));
-            let shown = if c.tot == 0 {
-                String::new()
-            } else {
-                c.tot.to_string()
-            };
-            let (r, v) = ui
-                .add_enabled_ui(!rx_only, |ui| {
-                    checked_text(ui, id, shown, 100.0, |s| {
-                        let t = s.trim();
-                        if t.is_empty() {
-                            return Some(0u16);
+            // The radio's default, then the 15 s steps the record stores up to 3825 s (the imports round up to them)
+            ui.add_enabled_ui(!rx_only, |ui| {
+                egui::ComboBox::from_id_salt(("dtot", number))
+                    .selected_text(tot_text(c.tot))
+                    .width(150.0)
+                    .height(300.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut c.tot, 0, tot_text(0));
+                        for secs in (15..=3825u16).step_by(15) {
+                            ui.selectable_value(&mut c.tot, secs, tot_text(secs));
                         }
-                        t.parse::<u16>()
-                            .ok()
-                            .filter(|v| *v <= 3825)
-                            .map(|v| v.div_ceil(15) * 15)
                     })
-                })
-                .inner;
-            r.labelled_by(l.id);
-            if let Some(v) = v {
-                c.tot = v;
-            }
-            if c.tot == 0 {
-                ui.label(RichText::new("Radio Default").color(p.muted));
-            }
+                    .response
+            })
+            .inner
+            .labelled_by(l.id);
             ui.end_row();
             let l = ui.label("RX Only");
             if let Some(t) = &mut c.tagged {

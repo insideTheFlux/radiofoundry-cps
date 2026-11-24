@@ -27,6 +27,19 @@ pub fn tx_freq_edit(ui: &mut Ui, id: egui::Id, hz: u64, rx_hz: u64, enabled: boo
     .inner
 }
 
+/// Why the TX frequency being typed in the field `id` is refused, while it is typed: a frequency in a receive-only band
+/// when the RX is outside one (the same rule `tx_freq_edit` applies), worded as the web editor does.
+pub fn tx_refusal(ui: &Ui, id: egui::Id, hz: u64, rx_hz: u64) -> Option<String> {
+    use rfcps_core::freqs::listen_band;
+    if !ui.memory(|m| m.has_focus(id)) {
+        return None;
+    }
+    let typed: String = ui.data(|d| d.get_temp(id))?;
+    let h = parse_mhz(&typed)?;
+    (listen_band(h).is_some() && listen_band(rx_hz).is_none() && h != hz)
+        .then(|| format!("{:.3} MHz is not a supported transmit frequency.", h as f64 / 1e6))
+}
+
 /// "146.52" or "146,52" MHz as Hz on a 10 Hz grid, or `None` if it is no frequency in 30 to 1000 MHz.
 pub fn parse_mhz(text: &str) -> Option<u64> {
     let mhz: f64 = text.trim().replace(',', ".").parse().ok()?;
