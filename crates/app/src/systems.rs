@@ -106,16 +106,22 @@ fn opt_hex<T: Copy + TryFrom<u32> + Into<u32>>(
 }
 
 /// A frequency in MHz; empty or 0 is "none" where `zero_ok`.
+/// A box given its width. A grid cell is as wide as the widest thing its column held the frame before, which starts as
+/// the column's heading, so a box without a width of its own is cut to the heading's.
+fn boxed<R>(ui: &mut Ui, width: f32, f: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.allocate_ui_with_layout(egui::vec2(width + 8.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), f).inner
+}
+
 fn mhz_field(ui: &mut Ui, id: egui::Id, hz: &mut u32, zero_ok: bool) -> egui::Response {
     let shown = if *hz == 0 { String::new() } else { format!("{:.5}", f64::from(*hz) / 1e6) };
-    let (r, v) = checked_text(ui, id, shown, 96.0, |s| {
+    let (r, v) = boxed(ui, 96.0, |ui| checked_text(ui, id, shown, 96.0, |s| {
         let t = s.trim();
         if t.is_empty() || t == "0" {
             zero_ok.then_some(0u32)
         } else {
             parse_mhz(t).and_then(|h| u32::try_from(h).ok())
         }
-    });
+    }));
     if let Some(v) = v {
         *hz = v;
     }
@@ -124,9 +130,9 @@ fn mhz_field(ui: &mut Ui, id: egui::Id, hz: &mut u32, zero_ok: bool) -> egui::Re
 
 /// An unsigned number in `0..=max`.
 fn num_field<T: Copy + TryFrom<u64> + Into<u64>>(ui: &mut Ui, id: egui::Id, value: &mut T, max: u64, w: f32) -> egui::Response {
-    let (r, v) = checked_text(ui, id, Into::<u64>::into(*value).to_string(), w, |s| {
+    let (r, v) = boxed(ui, w, |ui| checked_text(ui, id, Into::<u64>::into(*value).to_string(), w, |s| {
         s.trim().parse::<u64>().ok().filter(|v| *v <= max).and_then(|v| T::try_from(v).ok())
-    });
+    }));
     if let Some(v) = v {
         *value = v;
     }
@@ -244,13 +250,8 @@ fn aes_keys(ui: &mut Ui, s: &mut System, number: u16) {
                 k.id = id;
                 if show {
                     let fid = egui::Id::unique(("aes_key", number, i));
-                    // A grid cell is as wide as the widest thing the column held the frame before, which is its heading:
-                    // the box is given its width, so the 64 digits show whole
-                    let (r, v) = ui
-                        .allocate_ui_with_layout(egui::vec2(560.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            checked_text(ui, fid, sys::key_hex_32(&k.key), 540.0, sys::parse_key_hex_32)
-                        })
-                        .inner;
+                    // the box is given its width (`boxed`), so the 64 digits show whole
+                    let (r, v) = boxed(ui, 540.0, |ui| checked_text(ui, fid, sys::key_hex_32(&k.key), 540.0, sys::parse_key_hex_32));
                     r.accessible_name(format!("AES-256 key, key {n}"));
                     if let Some(v) = v {
                         k.key = v;
@@ -570,17 +571,16 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
     let mut swap: Option<(usize, usize)> = None;
 
     group(ui, "Sites");
-    egui::Grid::new(("sys_sites", number)).num_columns(5).spacing([12.0, 6.0]).show(ui, |ui| {
+    egui::Grid::new(("sys_sites", number)).num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
         ui.label("Site");
         ui.label("RFSS");
         ui.label("Site ID");
         ui.label("");
-        ui.label("");
         ui.end_row();
         for (i, e) in s.entries.iter_mut().enumerate() {
             let SysEntry { group, body: EntryBody::P25Site { rfss, site }, .. } = e else { continue };
-            let l = ui.label(format!("{group}"));
-            num_field(ui, egui::Id::unique(("site_no", number, i)), group, 254, 60.0).labelled_by(l.id);
+            let site_no = *group;
+            num_field(ui, egui::Id::unique(("site_no", number, i)), group, 254, 60.0).accessible_name(format!("Site {site_no}"));
             opt_byte(ui, egui::Id::unique(("site_rfss", number, i)), rfss, 254).accessible_name(format!("RFSS, site {group}"));
             opt_byte(ui, egui::Id::unique(("site_id", number, i)), site, 254).accessible_name(format!("Site ID, site {group}"));
             if ui.small_button("Remove").clicked() {
@@ -599,7 +599,7 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
     ui.label(RichText::new("In the order tried: the first is the primary. The TX frequency is empty when it comes from the plan's transmit offset.").size(13.0).color(muted));
     let ctl: Vec<usize> = s.entries.iter().enumerate().filter(|(_, e)| e.cls == 0 && e.control).map(|(i, _)| i).collect();
     egui::Grid::new(("sys_ctl", number)).num_columns(7).spacing([12.0, 6.0]).show(ui, |ui| {
-        for t in ["Site", "RX MHz", "TX MHz", "Identifier", "Channel", "", ""] {
+        for t in ["#", "Site", "RX MHz", "TX MHz", "Identifier", "Channel", "", ""] {
             ui.label(t);
         }
         ui.end_row();
@@ -640,12 +640,11 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
         ui.end_row();
         for (i, e) in s.entries.iter_mut().enumerate() {
             let SysEntry { group, body: EntryBody::P25Plan { base_hz, spacing_hz, tx_offset_hz, bw_hz, tdma, slots }, .. } = e else { continue };
-            let l = ui.label(format!("{group}"));
-            num_field(ui, egui::Id::unique(("plan_id", number, i)), group, 15, 50.0).labelled_by(l.id);
+            num_field(ui, egui::Id::unique(("plan_id", number, i)), group, 15, 50.0).accessible_name(format!("Identifier, plan row {}", i + 1));
             mhz_field(ui, egui::Id::unique(("plan_base", number, i)), base_hz, false).accessible_name(format!("Base MHz, identifier {group}"));
             num_field(ui, egui::Id::unique(("plan_sp", number, i)), spacing_hz, 1_000_000, 80.0).accessible_name(format!("Spacing Hz, identifier {group}"));
             let id = egui::Id::unique(("plan_off", number, i));
-            let (r, v) = checked_text(ui, id, tx_offset_hz.to_string(), 100.0, |t| t.trim().parse::<i32>().ok());
+            let (r, v) = boxed(ui, 100.0, |ui| checked_text(ui, id, tx_offset_hz.to_string(), 100.0, |t| t.trim().parse::<i32>().ok()));
             let _ = r.accessible_name(format!("TX offset Hz, identifier {group}"));
             if let Some(v) = v {
                 *tx_offset_hz = v;
@@ -822,7 +821,7 @@ fn t3_channels(ui: &mut Ui, s: &mut System, number: u16) {
     ui.label(RichText::new("The control channels are hunted in the order listed; the system uses the first 4 of its first 8 channels.").size(13.0).color(muted));
     let idx: Vec<usize> = s.entries.iter().enumerate().filter(|(_, e)| matches!(e.body, EntryBody::T3Channel { .. })).map(|(i, _)| i).collect();
     egui::Grid::new(("t3_chans", number)).num_columns(8).spacing([12.0, 6.0]).show(ui, |ui| {
-        for t in ["Control", "LCN", "RX MHz", "TX MHz", "Color code", "", "", ""] {
+        for t in ["#", "Control", "LCN", "RX MHz", "TX MHz", "Color code", "", ""] {
             ui.label(t);
         }
         ui.end_row();
