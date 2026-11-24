@@ -10,12 +10,12 @@
 
 use crate::model::Codeplug;
 use crate::modes::{
-    Fallback, Params, KIND_NXDN, KIND_P25, KIND_P25_TRUNK, KIND_T3,
+    Fallback, Params, KIND_AES, KIND_NXDN, KIND_P25, KIND_P25_TRUNK, KIND_T3,
 };
 use crate::qdmr::{add, frequency_text, Note, Notes};
 use crate::records::Channel;
 use crate::systems::{
-    EntryBody, SysEntry, System, SystemFields, SHARE_IDENTITY, SHARE_OFF, SHARE_WHOLE, SYSTEM_NXDN,
+    EntryBody, SysEntry, System, SystemFields, SHARE_IDENTITY, SHARE_OFF, SHARE_WHOLE, SYSTEM_AES, SYSTEM_NXDN,
     SYSTEM_P25_TRUNK, SYSTEM_T3,
 };
 use crate::yaml::Value;
@@ -52,6 +52,7 @@ fn type_short(t: u8) -> Option<&'static str> {
         SYSTEM_T3 => Some("T3"),
         SYSTEM_P25_TRUNK => Some("P25T"),
         SYSTEM_NXDN => Some("NXDN"),
+        SYSTEM_AES => Some("AES"),
         _ => None,
     }
 }
@@ -62,6 +63,7 @@ fn kind_short(k: u8) -> Option<&'static str> {
         KIND_P25 => Some("P25"),
         KIND_P25_TRUNK => Some("P25T"),
         KIND_NXDN => Some("NXDN"),
+        KIND_AES => Some("AES"),
         _ => None,
     }
 }
@@ -107,8 +109,9 @@ fn settings_of(f: &SystemFields) -> Option<Value> {
             ("sites", Value::flow(Value::List(x.sites.iter().map(|s| int(*s)).collect()))),
         ]),
         SystemFields::Nxdn => map(vec![]),
-        // AES systems and channels stay out of a qdmr file: it carries no keys, and qdmr has no such mode
-        SystemFields::Aes { .. } | SystemFields::Unknown => return None,
+        // the keys are never in a qdmr file
+        SystemFields::Aes { network } => map(vec![("network", int(*network))]),
+        SystemFields::Unknown => return None,
     })
 }
 
@@ -184,7 +187,8 @@ fn params_of(p: &Params) -> Option<Value> {
         }
         Params::P25Trunk(x) => map(vec![("followAll", Value::Bool(x.follow_all))]),
         Params::T3 => map(vec![]),
-        Params::Aes(_) | Params::Unknown => return None,
+        Params::Aes(x) => map(vec![("id", opt(x.key_id))]),
+        Params::Unknown => return None,
     }))
 }
 
@@ -210,7 +214,7 @@ pub fn export_modes<'a>(
     }
     let systems: Vec<(&System, String)> =
         kept.iter().enumerate().map(|(i, s)| (*s, format!("sys{}", i + 1))).collect();
-    let keys = kept.iter().filter(|s| s.secret.as_ref().is_some_and(|v| !v.is_empty()) || !s.traffic_keys.is_empty()).count();
+    let keys = kept.iter().filter(|s| s.secret.as_ref().is_some_and(|v| !v.is_empty()) || !s.traffic_keys.is_empty() || !s.aes_keys.is_empty()).count();
     if keys > 0 {
         add(notes, Note::ModeKeys, keys);
     }
@@ -457,6 +461,7 @@ fn system_fields_in(type_id: u8, settings: Option<&Value>) -> SystemFields {
             })
         }
         SYSTEM_NXDN => SystemFields::Nxdn,
+        SYSTEM_AES => SystemFields::Aes { network: g.int("network", 1i64).clamp(0, 255) as u8 },
         _ => SystemFields::Unknown,
     }
 }
@@ -573,7 +578,7 @@ pub fn import_modes(
         let row = x
             .get("type")
             .map(|t| crate::yaml::text_of(t.untag()))
-            .and_then(|t| [SYSTEM_T3, SYSTEM_P25_TRUNK, SYSTEM_NXDN].into_iter().find(|id| type_short(*id) == Some(t.as_str())));
+            .and_then(|t| [SYSTEM_T3, SYSTEM_P25_TRUNK, SYSTEM_NXDN, SYSTEM_AES].into_iter().find(|id| type_short(*id) == Some(t.as_str())));
         let Some(type_id) = row else {
             add(notes, Note::ModeUnknown, 1);
             continue;
@@ -611,6 +616,7 @@ pub fn import_modes(
         if let Some(was) = same(&s) {
             s.secret = was.secret.clone();
             s.traffic_keys = was.traffic_keys.clone();
+            s.aes_keys = was.aes_keys.clone();
         }
         sys_by_id.push((x.get("id").map(|v| crate::yaml::text_of(v.untag())).unwrap_or_default(), systems.len()));
         systems.push(s);
@@ -634,7 +640,7 @@ pub fn import_modes(
         let Some(b) = b else { continue };
         let Some(mode) = b.get("mode").map(Value::untag).filter(|m| !matches!(m, Value::Null)) else { continue };
         let mode = crate::yaml::text_of(mode);
-        let Some(kind) = [KIND_T3, KIND_P25, KIND_P25_TRUNK, KIND_NXDN].into_iter().find(|k| kind_short(*k) == Some(mode.as_str()))
+        let Some(kind) = [KIND_T3, KIND_P25, KIND_P25_TRUNK, KIND_NXDN, KIND_AES].into_iter().find(|k| kind_short(*k) == Some(mode.as_str()))
         else {
             add(notes, Note::ModeUnknown, 1);
             continue;
@@ -645,7 +651,7 @@ pub fn import_modes(
             sys_by_id.iter().rev().find(|(k, _)| *k == id).map(|(_, i)| *i)
         });
         let sys_byte = system.map_or(0xFF, |i| i as u8);
-        let default_tx = matches!(kind, KIND_P25 | KIND_NXDN | KIND_T3);
+        let default_tx = matches!(kind, KIND_P25 | KIND_NXDN | KIND_T3 | KIND_AES);
         let tx = match b.get("transmit").map(Value::untag) {
             None | Some(Value::Null) => default_tx,
             Some(v) => matches!(v, Value::Bool(true)),
@@ -671,6 +677,9 @@ pub fn import_modes(
                 })
             }
             KIND_P25_TRUNK => Params::P25Trunk(crate::modes::P25TrunkChan { follow_all: g.flag("followAll", false) }),
+            KIND_AES => Params::Aes(crate::modes::AesChan {
+                key_id: g.get("id").and_then(to_number).filter(|n| n.fract() == 0.0 && (0.0..=255.0).contains(n)).map(|n| n as u8),
+            }),
             _ => Params::T3,
         };
         let fallback = ref_of(b.get("fallback")).map_or(Fallback::None, Fallback::Channel);

@@ -19,6 +19,7 @@ let R;
 const rnd = (n) => Math.floor(R() * n);
 const pick = (a) => a[rnd(a.length)];
 const chance = (p) => R() < p;
+const aesKey = () => Array.from({ length: 32 }, () => rnd(256).toString(16).padStart(2, "0")).join("");
 const ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _-./*#";
 const word = (max, min = 1) => { const n = min + rnd(max - min + 1); let s = ""; for (let i = 0; i < n; i++) s += ALPHA[rnd(ALPHA.length)]; return s.trim() || "X"; };
 const TONES = ["", "67.0", "88.5", "100.0", "123.0", "146.2", "250.3", "D023N", "D023I", "D754I", "D411N"];
@@ -91,16 +92,33 @@ const OPS = {
 		else if (s.trafficKeys.length) pick(s.trafficKeys).seed = 1 + rnd(32767);
 	},
 	nxdnTx: (m) => { const c = m.channels.find((x) => x.kind === 4 && chance(0.5)); if (!c) return; if (chance(0.3)) delete c.params.txKeyId; else if (c.system && typeof c.system === "object" && c.system.trafficKeys.length) c.params.txKeyId = pick(c.system.trafficKeys).id; },
+	aesSys: (m) => {
+		const s = newSystem(m, 5, word(16));
+		s.fields.network = chance(0.2) ? 1 : rnd(256);
+		s.tx = chance(0.7); s.ownId = chance(0.5) ? 0 : 1 + rnd(16776415);
+		const used = new Set();
+		for (let i = rnd(4); i > 0; i--) { const id = rnd(256); if (!used.has(id)) { used.add(id); s.trafficKeys.push({ id, key: aesKey(), flags: chance(0.2) ? rnd(256) : 0 }); } }
+		m.systems.push(s);
+		if (chance(0.7) && m.channels.length) { const c = ch(m); setKind(m, c, 5); c.system = s; if (s.trafficKeys.length && chance(0.6)) c.params.id = pick(s.trafficKeys).id; else if (chance(0.15)) c.params.id = rnd(256); if (chance(0.3)) c.tagTx = !c.tagTx; if (chance(0.3)) { const hz = pick([146520000, 147000000, 223500000, 446000000, 462562500, 433000000]); c.rxHz = hz; c.txHz = hz; } }
+	},
+	aesKeyEdit: (m) => {
+		const sys = m.systems.filter((s) => s.type === 5); if (!sys.length) return; const s = pick(sys);
+		if (chance(0.4) && s.trafficKeys.length) s.trafficKeys.splice(rnd(s.trafficKeys.length), 1);
+		else if (chance(0.5)) { const id = rnd(256); if (!s.trafficKeys.some((k) => k.id === id)) s.trafficKeys.push({ id, key: aesKey(), flags: 0 }); }
+		else if (s.trafficKeys.length) pick(s.trafficKeys).key = aesKey();
+		if (chance(0.2)) s.fields.network = rnd(256);
+	},
+	aesPick: (m) => { const c = m.channels.find((x) => x.kind === 5 && chance(0.5)); if (!c) return; if (chance(0.3)) c.params.id = null; else if (c.system && typeof c.system === "object" && c.system.trafficKeys.length) c.params.id = pick(c.system.trafficKeys).id; },
 	sysEdit: (m) => { if (!m.systems.length) return; const s = pick(m.systems); if (chance(0.5)) s.name = word(16); if (chance(0.5)) s.tx = !s.tx; if (s.entries.length && chance(0.5)) s.entries.splice(rnd(s.entries.length), 1); },
 	sysDel: (m) => { if (m.systems.length) remove(m, "systems", [pick(m.systems)]); },
 };
-const WEIGHT = { nxdnSys: 2, keyEdit: 2, nxdnTx: 2, listEdit: 3, manyChannels: 1, bigZone: 2, zoneShuffle: 2, kind: 5, sysAdd: 3, sysEdit: 2, rename: 3, delChannel: 2, zoneEdit: 2, unitIds: 2 };
+const WEIGHT = { aesSys: 2, aesKeyEdit: 2, aesPick: 2, nxdnSys: 2, keyEdit: 2, nxdnTx: 2, listEdit: 3, manyChannels: 1, bigZone: 2, zoneShuffle: 2, kind: 5, sysAdd: 3, sysEdit: 2, rename: 3, delChannel: 2, zoneEdit: 2, unitIds: 2 };
 const OPNAMES = Object.keys(OPS).flatMap((k) => Array(WEIGHT[k] || 1).fill(k));
 
 const cleanProblems = (ps) => ps.map((p) => ({ level: p.level, table: p.table, number: p.item && typeof p.item === "object" ? p.item.number ?? null : null }));
 
 function sysDump(s) {
-	return ({ number: s.number, type: s.type, name: s.name, sharing: s.sharing, ownId: s.ownId, tx: s.tx, needsKey: s.needsKey, fields: s.fields, entries: s.entries.map(({ raw, ...e }) => (s.type === 3 && e.cls === 0 && e.chan === undefined ? { ...e, chan: ((e.iden & 15) << 12) | (e.chanNo & 0xFFF) } : e)), hasSecret: !!s.secret, trafficKeys: (s.trafficKeys ?? []).map((k) => ({ id: k.id, seed: k.seed, flags: k.flags, slot: k.slot ?? null })) });
+	return ({ number: s.number, type: s.type, name: s.name, sharing: s.sharing, ownId: s.ownId, tx: s.tx, needsKey: s.needsKey, fields: s.fields, entries: s.entries.map(({ raw, ...e }) => (s.type === 3 && e.cls === 0 && e.chan === undefined ? { ...e, chan: ((e.iden & 15) << 12) | (e.chanNo & 0xFFF) } : e)), hasSecret: !!s.secret, trafficKeys: (s.trafficKeys ?? []).map((k) => ({ id: k.id, seed: k.seed ?? null, key: k.key ?? null, flags: k.flags, slot: k.slot ?? null })) });
 }
 
 function dump(m) {

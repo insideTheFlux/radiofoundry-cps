@@ -78,7 +78,9 @@ fn system_json(s: &rfcps_core::systems::System) -> Value {
         .collect();
     json!({"number": s.number, "type": s.type_id, "name": s.name, "sharing": s.sharing, "ownId": s.own_id, "tx": s.tx,
         "needsKey": s.needs_key, "fields": fields, "entries": entries, "hasSecret": s.secret.is_some(),
-        "trafficKeys": s.traffic_keys.iter().map(|k| json!({"id": k.id, "seed": k.seed, "flags": k.flags, "slot": k.slot})).collect::<Vec<_>>()})
+        "trafficKeys": s.traffic_keys.iter().map(|k| json!({"id": k.id, "seed": k.seed, "key": Value::Null, "flags": k.flags, "slot": k.slot}))
+            .chain(s.aes_keys.iter().map(|k| json!({"id": k.id, "seed": Value::Null, "key": rfcps_core::systems::key_hex_32(&k.key), "flags": k.flags, "slot": k.slot})))
+            .collect::<Vec<_>>()})
 }
 
 fn dump(cp: &Codeplug) -> Value {
