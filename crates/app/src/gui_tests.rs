@@ -1143,6 +1143,82 @@ fn a_tx_frequency_in_a_receive_only_band_is_refused_unless_the_rx_is_there() {
 }
 
 #[test]
+fn an_rx_only_channel_grays_its_transmit_fields_and_keeps_their_values() {
+    let mut h = harness_with_channel(|cp| {
+        let c = &mut cp.channels[0];
+        c.tx_hz = 146_940_000; // an offset repeater pair
+        c.tot = 180;
+        c.tx_tone = "88.5".into();
+        c.vox = true;
+        c.rx_only = false;
+    });
+    let off = |h: &H| {
+        let text = |l: &str| h.get_by_role_and_label(Role::TextInput, l).accesskit_node().is_disabled();
+        (
+            text("TX MHz"),
+            text("TX Timeout (s)"),
+            // the table has a cell of the same name: the form's is the last
+            h.get_all_by_role_and_label(Role::TextInput, "TX tone, channel 1").last().unwrap().accesskit_node().is_disabled(),
+            h.get_by_role_and_label(Role::ComboBox, "Power").accesskit_node().is_disabled(),
+            h.get_by_label("VOX Allowed").accesskit_node().is_disabled(),
+            h.get_by_label("1750 Hz Tone Burst").accesskit_node().is_disabled(),
+        )
+    };
+    // transmitting: every one is open
+    assert_eq!(off(&h), (false, false, false, false, false, false));
+    click(&mut h, "RX Only");
+    assert!(channel(&h).rx_only);
+    assert_eq!(off(&h), (true, true, true, true, true, true));
+    // The values are kept, and the table's cells are blank and locked
+    let c = channel(&h);
+    assert_eq!((c.tx_hz, c.tot, c.tx_tone.as_str(), c.vox), (146_940_000, 180, "88.5", true));
+    assert!(h.get_by_role_and_label(Role::TextInput, "TX MHz, channel 1").accesskit_node().is_disabled());
+    assert!(h.query_by_role_and_label(Role::ComboBox, "Power, channel 1").is_none());
+    // RX Only off again: they come back as they were
+    click(&mut h, "RX Only");
+    assert_eq!(off(&h), (false, false, false, false, false, false));
+    let c = channel(&h);
+    assert_eq!((c.tx_hz, c.tot, c.tx_tone.as_str(), c.vox), (146_940_000, 180, "88.5", true));
+}
+
+#[test]
+fn a_tx_frequency_in_a_receive_only_band_stays_open_to_be_corrected() {
+    // an import left TX in the air band with RX on a repeater: RX Only, with the TX cell open
+    let mut h = harness_with_channel(|cp| {
+        let c = &mut cp.channels[0];
+        c.tx_hz = 121_500_000;
+        rfcps_core::freqs::follow_listen(c);
+    });
+    assert!(channel(&h).rx_only);
+    assert!(!h.get_by_role_and_label(Role::TextInput, "TX MHz").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(Role::TextInput, "TX Timeout (s)").accesskit_node().is_disabled());
+    // the RX in the air band: TX is locked
+    retype(&mut h, "RX MHz", "118.0");
+    assert!(h.get_by_role_and_label(Role::TextInput, "TX MHz").accesskit_node().is_disabled());
+}
+
+#[test]
+fn a_tone_is_picked_from_the_standard_list_and_searched() {
+    let mut h = harness_with_channel(|_| {});
+    // the table's cell and the form's field share a name: the form's is the last
+    h.get_all_by_label("Tones, tx tone, channel 1").last().unwrap().click();
+    h.step();
+    h.run();
+    // the list is searchable: D023I is the second entry of the codes
+    type_into(&mut h, "Search tones", "D023");
+    click(&mut h, "D023I");
+    assert_eq!(channel(&h).tx_tone, "D023I");
+    // and a tone typed by hand is still taken
+    h.get_all_by_role_and_label(Role::TextInput, "TX tone, channel 1").last().unwrap().focus();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run();
+    h.get_all_by_role_and_label(Role::TextInput, "TX tone, channel 1").last().unwrap().type_text("100");
+    h.run();
+    assert_eq!(channel(&h).tx_tone, "100.0");
+}
+
+#[test]
 fn accept_invalid_crc_is_a_dmr_channel_setting() {
     let mut h = harness_with_channel(|_| {});
     pick(&mut h, "Mode", "DMR");

@@ -176,6 +176,10 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                             let _ = listen;
                         });
                         row.col(|ui| {
+                            if tx_freq_locked(c) {
+                                blank_cell(ui, 86.0, format!("TX MHz, channel {number}"));
+                                return;
+                            }
                             let (r, v) = tx_freq_edit(
                                 ui,
                                 ui.scope_id().with(("tx_hz", number)),
@@ -195,6 +199,10 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                                 .clicked();
                         });
                         row.col(|ui| {
+                            if rx_only_shown(c) {
+                                blank_cell(ui, 70.0, format!("Power, channel {number}"));
+                                return;
+                            }
                             hit |= power_combo(ui, c, ("power", number))
                                 .accessible_name(format!("Power, channel {number}"))
                                 .clicked();
@@ -209,6 +217,10 @@ fn table(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &C
                             );
                         });
                         row.col(|ui| {
+                            if rx_only_shown(c) {
+                                blank_cell(ui, 70.0, format!("TX tone, channel {number}"));
+                                return;
+                            }
                             hit |= tone_field(
                                 ui,
                                 ui.scope_id().with(("tx_tone", number)),
@@ -317,14 +329,57 @@ fn contact_combo(
         .response
 }
 
+/// The channel may not transmit: RX Only, which a channel with its RX in the air band or broadcast FM always is (TX
+/// follows RX there). The transmit fields are then grayed and locked; their values are kept and show again when RX Only
+/// is cleared (RadioFoundry #946).
+fn rx_only_shown(c: &Channel) -> bool {
+    c.tagged.as_ref().map_or(c.rx_only, |t| !t.tx) || listen_band(c.rx_hz).is_some()
+}
+
+/// The TX frequency stays open on an RX Only channel when it is a TX frequency in a receive-only band that made the
+/// channel RX Only (an import): it can be corrected.
+fn tx_freq_locked(c: &Channel) -> bool {
+    rx_only_shown(c) && !(listen_band(c.rx_hz).is_none() && listen_band(c.tx_hz).is_some())
+}
+
+/// A blank, locked cell where a transmit field does not apply.
+fn blank_cell(ui: &mut Ui, width: f32, name: String) {
+    ui.add_enabled(false, egui::TextEdit::singleline(&mut String::new()).desired_width(width)).accessible_name(name);
+}
+
 /// A tone field; true when it took focus.
 fn tone_field(ui: &mut Ui, id: egui::Id, value: &mut String, width: f32, name: String) -> bool {
     let (r, v) = checked_text(ui, id, value.clone(), width, parse_tone);
-    let r = r.accessible_name(name);
+    let r = r.accessible_name(name.clone());
+    let mut hit = r.gained_focus();
     if let Some(v) = v {
         *value = v;
     }
-    r.gained_focus()
+    // The standard tones as a searchable list (any other valid tone can still be typed)
+    let filter_id = id.with("tone_filter");
+    let menu = ui.menu_button("…", |ui| {
+        let mut filter = ui.data(|d| d.get_temp::<String>(filter_id)).unwrap_or_default();
+        let r = ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search").desired_width(110.0)).accessible_name("Search tones");
+        r.request_focus();
+        ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+        let f = filter.trim().to_uppercase();
+        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+            if f.is_empty() && ui.selectable_label(value.is_empty(), "None").clicked() {
+                value.clear();
+                ui.close();
+            }
+            for t in rfcps_core::fields::standard_tones() {
+                if (f.is_empty() || t.contains(&f)) && ui.selectable_label(*value == t, &t).clicked() {
+                    *value = t;
+                    ui.close();
+                }
+            }
+        });
+    });
+    let clicked = menu.response.clicked();
+    menu.response.on_hover_text("Standard CTCSS and DCS tones").accessible_name(format!("Tones, {}", name.to_lowercase()));
+    hit |= clicked;
+    hit
 }
 
 fn group(ui: &mut Ui, title: &str) {
@@ -347,6 +402,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
     let c = &mut cp.channels[i];
     let number = c.number;
     let listen = listen_band(c.rx_hz);
+    let rx_only = rx_only_shown(c);
     ui.label(RichText::new(format!("Channel {number}")).heading());
 
     group(ui, "Channel");
@@ -361,7 +417,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             mode_combo(ui, c, &cp.systems, ("dmode", number)).labelled_by(l.id);
             ui.end_row();
             let l = ui.label("Power");
-            power_combo(ui, c, ("dpower", number)).labelled_by(l.id);
+            ui.add_enabled_ui(!rx_only, |ui| power_combo(ui, c, ("dpower", number))).inner.labelled_by(l.id);
             ui.end_row();
             let l = ui.label("RX MHz");
             // A channel of a kind that runs on a system takes its system's control channel's frequencies.
@@ -378,7 +434,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 egui::Id::unique(("d_tx", number)),
                 c.tx_hz,
                 c.rx_hz,
-                listen.is_none() && own,
+                !tx_freq_locked(c) && own,
             );
             r.labelled_by(l.id);
             if let Some(v) = v {
@@ -395,7 +451,7 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
         );
     }
     ui.horizontal_wrapped(|ui| {
-        let editable = listen.is_none();
+        let editable = listen.is_none() && !rx_only;
         if ui
             .add_enabled(editable, egui::Button::new("Copy RX to TX"))
             .clicked()
@@ -426,16 +482,20 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
             } else {
                 c.tot.to_string()
             };
-            let (r, v) = checked_text(ui, id, shown, 100.0, |s| {
-                let t = s.trim();
-                if t.is_empty() {
-                    return Some(0u16);
-                }
-                t.parse::<u16>()
-                    .ok()
-                    .filter(|v| *v <= 3825)
-                    .map(|v| v.div_ceil(15) * 15)
-            });
+            let (r, v) = ui
+                .add_enabled_ui(!rx_only, |ui| {
+                    checked_text(ui, id, shown, 100.0, |s| {
+                        let t = s.trim();
+                        if t.is_empty() {
+                            return Some(0u16);
+                        }
+                        t.parse::<u16>()
+                            .ok()
+                            .filter(|v| *v <= 3825)
+                            .map(|v| v.div_ceil(15) * 15)
+                    })
+                })
+                .inner;
             r.labelled_by(l.id);
             if let Some(v) = v {
                 c.tot = v;
@@ -498,13 +558,15 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 );
                 ui.end_row();
                 ui.label("TX Tone");
-                tone_field(
-                    ui,
-                    egui::Id::unique(("d_txt", number)),
-                    &mut c.tx_tone,
-                    100.0,
-                    format!("TX tone, channel {number}"),
-                );
+                ui.add_enabled_ui(!rx_only, |ui| {
+                    tone_field(
+                        ui,
+                        egui::Id::unique(("d_txt", number)),
+                        &mut c.tx_tone,
+                        100.0,
+                        format!("TX tone, channel {number}"),
+                    )
+                });
                 ui.end_row();
                 let l = ui.label("Squelch");
                 let cb = egui::ComboBox::from_id_salt(("dsq", number))
@@ -526,10 +588,10 @@ fn detail(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>, choices: &
                 aprs_combo(ui, c, choices, ("faprs", number)).labelled_by(l.id);
                 ui.end_row();
                 let l = ui.label("VOX Allowed");
-                ui.checkbox(&mut c.vox, "").labelled_by(l.id);
+                ui.add_enabled(!rx_only, egui::Checkbox::new(&mut c.vox, "")).labelled_by(l.id);
                 ui.end_row();
                 let l = ui.label("1750 Hz Tone Burst");
-                ui.checkbox(&mut c.tone_burst, "").labelled_by(l.id);
+                ui.add_enabled(!rx_only, egui::Checkbox::new(&mut c.tone_burst, "")).labelled_by(l.id);
                 ui.end_row();
             });
         ui.label(
