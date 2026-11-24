@@ -246,8 +246,9 @@ pub struct PortInfo {
 
 /// USB vendor and product ids of the serial chips radios and their cables use. `None` for a product matches every
 /// product of the vendor.
-const CABLE_CHIPS: [(u16, Option<u16>); 7] = [
+const CABLE_CHIPS: [(u16, Option<u16>); 8] = [
     (0x0403, None),         // FTDI
+    (0x2100, None),         // RT Systems cables: an FTDI chip under the vendor's own id
     (0x1A86, Some(0x7523)), // CH340
     (0x1A86, Some(0x55D4)), // CH9102
     (0x10C4, Some(0xEA60)), // CP210x
@@ -256,6 +257,12 @@ const CABLE_CHIPS: [(u16, Option<u16>); 7] = [
     (0x0483, Some(0x5740)), // STM32 virtual COM port
 ];
 
+fn is_cable_chip(vid: u16, pid: u16) -> bool {
+    CABLE_CHIPS
+        .iter()
+        .any(|&(v, p)| v == vid && p.is_none_or(|x| x == pid))
+}
+
 /// The serial ports on this computer: likely radio cables first, then other USB ports, then the rest.
 pub fn ports() -> Vec<PortInfo> {
     let mut v: Vec<PortInfo> = serialport::available_ports()
@@ -263,9 +270,7 @@ pub fn ports() -> Vec<PortInfo> {
         .into_iter()
         .map(|p| match p.port_type {
             serialport::SerialPortType::UsbPort(u) => PortInfo {
-                likely: CABLE_CHIPS
-                    .iter()
-                    .any(|&(v, pid)| v == u.vid && pid.is_none_or(|x| x == u.pid)),
+                likely: is_cable_chip(u.vid, u.pid),
                 description: format!(
                     "{} ({:04X}:{:04X})",
                     u.product
@@ -308,4 +313,24 @@ pub fn open(name: &str) -> Result<Radio<Box<dyn serialport::SerialPort>>> {
         .open()
         .map_err(|e| LinkError::Io(io::Error::other(e.to_string())))?;
     Ok(Radio::new(port))
+}
+
+#[cfg(test)]
+mod cable_tests {
+    use super::is_cable_chip;
+
+    #[test]
+    fn cable_chips_are_ranked_as_likely() {
+        assert!(is_cable_chip(0x0403, 0x6001), "FTDI, any product");
+        assert!(
+            is_cable_chip(0x2100, 0x9E5D),
+            "RT Systems USB-K4Y: FTDI under its own vendor id"
+        );
+        assert!(is_cable_chip(0x1A86, 0x7523), "CH340");
+        assert!(
+            !is_cable_chip(0x1A86, 0x0001),
+            "CH340's vendor, not a listed product"
+        );
+        assert!(!is_cable_chip(0x046D, 0xC52B), "a mouse receiver");
+    }
 }
