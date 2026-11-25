@@ -37,7 +37,7 @@ each release's notes say which RadioFoundry commit it matches (0.5.4: `dd67ecd6`
 
 ## Screenshots
 
-Most were taken with version 0.5.1; the four showing DMR AES-256, the tone list and the grayed transmit fields were taken
+Most were taken with version 0.5.1; the five showing DMR AES-256, the tone list and the grayed transmit fields were taken
 with 0.5.4. All use an invented test image (no real radio, call signs, names or keys).
 
 ![The Channels tab: a table of 39 channels with name, RX and TX frequency, mode, power, tones and TX contact, and on the right the form of channel 7, a P25 trunked channel on the system "Prep P25T".](docs/images/channels.png)
@@ -50,28 +50,19 @@ with 0.5.4. All use an invented test image (no real radio, call signs, names or 
 
 ![The Contacts tab: a table of 14 contacts with name, DMR ID, call type and timeslot, such as Talkgroup 1, Local 91, Worldwide and Private Call.](https://github.com/user-attachments/assets/bf778325-c3e5-43a0-bc79-66506486d57d)
 
-![The Channels tab with channel 5, "Fire AES 1", in AES mode: its DMR fields and, at the bottom of the form, the DMR AES-256 section with the system "County Fire AES" and a PI key ID.](docs/images/aes-channel.png)
-
-![The Systems tab with a DMR AES-256 system selected: name, transmit side, Network ID 7 and a Traffic keys table with PI key ID 9 and its 64-digit key shown whole.](docs/images/aes-system-keys-shown.png)
-
-![The Channels tab with the searchable list of CTCSS tones and DCS codes open beside the RX Tone field.](docs/images/tone-list.png)
-
-![A receive-only weather channel on 162.55 MHz with RX Only ticked: power, TX frequency, copy and swap, TX timeout and TX tone are grayed.](docs/images/rx-only.png)
-
 ![The ID Database tab: the codeplug holds a compact DMR ID database of 1,800 records, and below it the four steps to build one from RadioID.net (users, regions, filters and text).](https://github.com/user-attachments/assets/92879264-704f-4b73-a8ba-5bedfc9dff28)
 
 ![The General tab: the radio name and DMR ID, call hang times, the two boot text lines, the ARS server and IP gateway IDs, and the tones.](https://github.com/user-attachments/assets/190914d4-f98d-438a-8a8a-4c0499ee9ff7)
 
-<img width="1400" height="850" alt="aes-channel" src="https://github.com/user-attachments/assets/4ad1e23f-756b-469a-9311-f0703473c63d" />
+![The Channels tab with channel 5, "Fire AES 1", in AES mode: its DMR fields and, at the bottom of the form, the DMR AES-256 section with the system "County Fire AES" and a PI key ID.](https://github.com/user-attachments/assets/4ad1e23f-756b-469a-9311-f0703473c63d)
 
-<img width="1400" height="850" alt="aes-system" src="https://github.com/user-attachments/assets/28ac6928-876c-497e-967b-e76cbfc1b83d" />
+![The Systems tab with a DMR AES-256 system "County Fire AES" selected: transmit side, Network ID 7 and a Traffic keys table where PI key ID 9 shows its key as "Set", with Generate and Remove buttons and the Show AES keys box unticked.](https://github.com/user-attachments/assets/28ac6928-876c-497e-967b-e76cbfc1b83d)
 
-<img width="1400" height="850" alt="aes-system-keys-shown" src="https://github.com/user-attachments/assets/a138e765-0678-49fb-9820-2d1b8472f3b4" />
+![The same AES system with Show AES keys ticked: the key for PI key ID 9 is shown whole, all 64 hexadecimal digits.](https://github.com/user-attachments/assets/a138e765-0678-49fb-9820-2d1b8472f3b4)
 
-<img width="1400" height="850" alt="rx-only" src="https://github.com/user-attachments/assets/bc508839-6a00-4230-8735-d69a5b54b546" />
+![A receive-only weather channel on 162.55 MHz with RX Only ticked: power, TX frequency, copy and swap, TX timeout and TX tone are grayed.](https://github.com/user-attachments/assets/bc508839-6a00-4230-8735-d69a5b54b546)
 
-<img width="1400" height="850" alt="tone-list" src="https://github.com/user-attachments/assets/a33fa358-5422-4cdb-892a-0e419c9252d4" />
-
+![The Channels tab with the searchable list of CTCSS tones and DCS codes open beside the RX Tone field.](https://github.com/user-attachments/assets/a33fa358-5422-4cdb-892a-0e419c9252d4)
 
 ## Screen readers
 
