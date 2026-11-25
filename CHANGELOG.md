@@ -1,12 +1,21 @@
 # Changes
 
+## 0.5.4
+
+### Fixed
+
+- **AES keys** (Systems tab): 0.5.3 said the key box shows all 64 hex digits, but at the default window size it cut off
+  the last four. Its width now comes from the font, so all 64 show, and the full key was always the one stored and
+  written; only the display was short.
+
 ## 0.5.3
 
 Fixes found by running the 0.5.2 package on a hidden display and looking at every system and tab.
 
 ### Fixed
 
-- **AES keys** (Systems tab): the key box showed about 7 of the 64 hex digits. It shows all of them now.
+- **AES keys** (Systems tab): the key box showed about 7 of the 64 hex digits. It was widened, but still cut off the last four at the default
+  window size; fixed in 0.5.4.
 - **Tone lists** (Channels tab): the "…" button beside a tone field fell into the next column of the channel form, so the
   RX and TX rows did not line up, and in the channel table it was cut off to a sliver. It sits beside its field in the
   form; the table has no button (pick a tone from the list in the form, or type it).

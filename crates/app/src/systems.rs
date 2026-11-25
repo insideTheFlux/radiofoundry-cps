@@ -112,6 +112,17 @@ fn boxed<R>(ui: &mut Ui, width: f32, f: impl FnOnce(&mut Ui) -> R) -> R {
     ui.allocate_ui_with_layout(egui::vec2(width + 8.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), f).inner
 }
 
+/// The width of a box that shows `n` hexadecimal digits whole: the widest digit in the body font, times `n`, plus the
+/// box's own padding and a caret's room. A fixed width fell short by a few digits at some font sizes.
+fn hex_text_width(ui: &Ui, n: usize) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let widest = "0123456789ABCDEFabcdef"
+        .chars()
+        .map(|c| ui.painter().layout_no_wrap(c.to_string(), font.clone(), egui::Color32::WHITE).size().x)
+        .fold(0.0_f32, f32::max);
+    (widest * n as f32 + 2.0 * ui.spacing().button_padding.x + 6.0).ceil()
+}
+
 fn mhz_field(ui: &mut Ui, id: egui::Id, hz: &mut u32, zero_ok: bool) -> egui::Response {
     let shown = if *hz == 0 { String::new() } else { format!("{:.5}", f64::from(*hz) / 1e6) };
     let (r, v) = boxed(ui, 96.0, |ui| checked_text(ui, id, shown, 96.0, |s| {
@@ -250,8 +261,9 @@ fn aes_keys(ui: &mut Ui, s: &mut System, number: u16) {
                 k.id = id;
                 if show {
                     let fid = egui::Id::unique(("aes_key", number, i));
-                    // the box is given its width (`boxed`), so the 64 digits show whole
-                    let (r, v) = boxed(ui, 540.0, |ui| checked_text(ui, fid, sys::key_hex_32(&k.key), 540.0, sys::parse_key_hex_32));
+                    // the box is given its width (`boxed`), worked out from the font so the 64 digits show whole
+                    let w = hex_text_width(ui, 64);
+                    let (r, v) = boxed(ui, w, |ui| checked_text(ui, fid, sys::key_hex_32(&k.key), w, sys::parse_key_hex_32));
                     r.accessible_name(format!("AES-256 key, key {n}"));
                     if let Some(v) = v {
                         k.key = v;

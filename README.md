@@ -9,14 +9,15 @@ notice (see `LICENSE`, `AUTHORS`, `CONTRIBUTORS` and `NOTICE.md`).
 **Tested on one radio:** the DM-32UV, on Windows 11 and Linux. Other RadioFoundry radios may work, since RadioFoundry's spec says the protocol and the
 image layout are shared, but none has been tried; see [Adding a radio](docs/adding-a-radio.md). Version 0.5.3 was
 checked on Linux, including a real write (a test channel, zone, contacts, RX group list and boot text added, removed
-and the backup restored, ending byte for byte as it began); Windows was not checked again for 0.5.3.
+and the backup restored, ending byte for byte as it began); 0.5.4 changes only the width of one box on the screen.
+Windows was not checked again for 0.5.3 or 0.5.4.
 
 ## Download
 
 Get the [latest release](https://github.com/insideTheFlux/radiofoundry-cps/releases/latest): `rfcps-*-linux-x86_64.tar.gz`
 and `rfcps_*_amd64.deb` for Linux, `rfcps-*-windows-x86_64.zip` for Windows 11 (unsigned, so SmartScreen asks once).
 What changed in each version is in [CHANGELOG.md](CHANGELOG.md). It keeps pace with RadioFoundry's web Codeplug Editor;
-each release's notes say which RadioFoundry commit it matches (0.5.3: `dd67ecd6`).
+each release's notes say which RadioFoundry commit it matches (0.5.4: `dd67ecd6`).
 
 ## What it does
 
@@ -36,8 +37,8 @@ each release's notes say which RadioFoundry commit it matches (0.5.3: `dd67ecd6`
 
 ## Screenshots
 
-Taken with version 0.5.1, light/dark theme, on an invented test image (no real radio, call signs or names). They do
-not show what 0.5.2 and 0.5.3 added (DMR AES-256, the tone lists, the grayed transmit fields).
+Most were taken with version 0.5.1; the four showing DMR AES-256, the tone list and the grayed transmit fields were taken
+with 0.5.4. All use an invented test image (no real radio, call signs, names or keys).
 
 ![The Channels tab: a table of 39 channels with name, RX and TX frequency, mode, power, tones and TX contact, and on the right the form of channel 7, a P25 trunked channel on the system "Prep P25T".](docs/images/channels.png)
 
@@ -48,6 +49,14 @@ not show what 0.5.2 and 0.5.3 added (DMR AES-256, the tone lists, the grayed tra
 ![The Systems tab showing a recommended ham Tier III system added from a site's control channel: network model Huge, NET 1, category A, color code 1, registration with the talkgroups on.](docs/images/ham-system.png)
 
 ![The Contacts tab: a table of 14 contacts with name, DMR ID, call type and timeslot, such as Talkgroup 1, Local 91, Worldwide and Private Call.](https://github.com/user-attachments/assets/bf778325-c3e5-43a0-bc79-66506486d57d)
+
+![The Channels tab with channel 5, "Fire AES 1", in AES mode: its DMR fields and, at the bottom of the form, the DMR AES-256 section with the system "County Fire AES" and a PI key ID.](docs/images/aes-channel.png)
+
+![The Systems tab with a DMR AES-256 system selected: name, transmit side, Network ID 7 and a Traffic keys table with PI key ID 9 and its 64-digit key shown whole.](docs/images/aes-system-keys-shown.png)
+
+![The Channels tab with the searchable list of CTCSS tones and DCS codes open beside the RX Tone field.](docs/images/tone-list.png)
+
+![A receive-only weather channel on 162.55 MHz with RX Only ticked: power, TX frequency, copy and swap, TX timeout and TX tone are grayed.](docs/images/rx-only.png)
 
 ![The ID Database tab: the codeplug holds a compact DMR ID database of 1,800 records, and below it the four steps to build one from RadioID.net (users, regions, filters and text).](https://github.com/user-attachments/assets/92879264-704f-4b73-a8ba-5bedfc9dff28)
 
