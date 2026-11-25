@@ -62,6 +62,17 @@ with 0.5.4. All use an invented test image (no real radio, call signs, names or 
 
 ![The General tab: the radio name and DMR ID, call hang times, the two boot text lines, the ARS server and IP gateway IDs, and the tones.](https://github.com/user-attachments/assets/190914d4-f98d-438a-8a8a-4c0499ee9ff7)
 
+<img width="1400" height="850" alt="aes-channel" src="https://github.com/user-attachments/assets/4ad1e23f-756b-469a-9311-f0703473c63d" />
+
+<img width="1400" height="850" alt="aes-system" src="https://github.com/user-attachments/assets/28ac6928-876c-497e-967b-e76cbfc1b83d" />
+
+<img width="1400" height="850" alt="aes-system-keys-shown" src="https://github.com/user-attachments/assets/a138e765-0678-49fb-9820-2d1b8472f3b4" />
+
+<img width="1400" height="850" alt="rx-only" src="https://github.com/user-attachments/assets/bc508839-6a00-4230-8735-d69a5b54b546" />
+
+<img width="1400" height="850" alt="tone-list" src="https://github.com/user-attachments/assets/a33fa358-5422-4cdb-892a-0e419c9252d4" />
+
+
 ## Screen readers
 
 The program publishes every control to screen readers (AccessKit: UI Automation on Windows, AT-SPI on Linux), with a
