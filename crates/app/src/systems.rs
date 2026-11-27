@@ -621,7 +621,12 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
     ui.label(RichText::new("The site number is for the list; RFSS and site ID are for display and roaming. Empty means not known.").size(13.0).color(muted));
 
     group(ui, "Control channels");
-    ui.label(RichText::new("In the order tried: the first is the primary. The TX frequency is empty when it comes from the plan's transmit offset.").size(13.0).color(muted));
+    let ctl_hint = if hide_tx {
+        "In the order tried: the first is the primary. The TX frequencies are not shown: the radio never transmits on this system."
+    } else {
+        "In the order tried: the first is the primary. The TX frequency is empty when it comes from the plan's transmit offset."
+    };
+    ui.label(RichText::new(ctl_hint).size(13.0).color(muted));
     let ctl: Vec<usize> = s.entries.iter().enumerate().filter(|(_, e)| e.cls == 0 && e.control).map(|(i, _)| i).collect();
     egui::Grid::new(("sys_ctl", number)).num_columns(if hide_tx { 6 } else { 7 }).spacing([12.0, 6.0]).show(ui, |ui| {
         for t in ["#", "Site", "RX MHz", "TX MHz", "Identifier", "Channel", "", ""] {
