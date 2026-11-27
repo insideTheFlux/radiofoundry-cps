@@ -9,15 +9,15 @@ notice (see `LICENSE`, `AUTHORS`, `CONTRIBUTORS` and `NOTICE.md`).
 **Tested on one radio:** the DM-32UV, on Windows 11 and Linux. Other RadioFoundry radios may work, since RadioFoundry's spec says the protocol and the
 image layout are shared, but none has been tried; see [Adding a radio](docs/adding-a-radio.md). Version 0.5.3 was
 checked on Linux, including a real write (a test channel, zone, contacts, RX group list and boot text added, removed
-and the backup restored, ending byte for byte as it began); 0.5.4 changes only the width of one box on the screen.
-Windows was not checked again for 0.5.3 or 0.5.4.
+and the backup restored, ending byte for byte as it began); 0.5.4 changes only the width of one box on the screen, and 0.5.5 how blocked P25 systems are shown and written (not tried on a
+radio). Windows was not checked again for 0.5.3 to 0.5.5.
 
 ## Download
 
 Get the [latest release](https://github.com/insideTheFlux/radiofoundry-cps/releases/latest): `rfcps-*-linux-x86_64.tar.gz`
 and `rfcps_*_amd64.deb` for Linux, `rfcps-*-windows-x86_64.zip` for Windows 11 (unsigned, so SmartScreen asks once).
 What changed in each version is in [CHANGELOG.md](CHANGELOG.md). It keeps pace with RadioFoundry's web Codeplug Editor;
-each release's notes say which RadioFoundry commit it matches (0.5.4: `dd67ecd6`).
+each release's notes say which RadioFoundry commit it matches (0.5.5: `4e24a5e1`).
 
 ## What it does
 

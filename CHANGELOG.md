@@ -1,5 +1,30 @@
 # Changes
 
+## 0.5.5
+
+Brings the editor level with the web Codeplug Editor as of RadioFoundry `4e24a5e1` (2026-11-27).
+
+### Fixed
+
+- **P25 trunked systems the radio never transmits on (RadioFoundry #1080).** A WACN from BEE00 to BEEFF, or the system ID
+  00A, is one the firmware never transmits on. The editor offered transmit settings that could not take effect and wrote
+  the system's transmit flag on. Now such a system is written listen only whatever "Transmit side" says (the choice you
+  made is kept and comes back if you change the ID), the qdmr file says `transmit: false` for it, the Systems tab lists
+  it as listen only, the Transmit side box is disabled with a notice that names the ID, and the TX columns of its
+  control channels and channel plan are hidden (their values are kept). The notice is the web editor's wording.
+  The web editor does the same, and a golden test against it now covers the written bytes.
+
+### Changed
+
+- **APRS** (RadioFoundry #1185): the radio now reads the frequency of the APRS record, so an empty frequency means "the
+  radio's own setting"; the tab says so.
+- **Cables** (RadioFoundry #1127): the AIOC cable (USB 1209:7388) is ranked as a likely programming cable.
+
+### Not checked
+
+- Anything on a radio: the changes are in the editor and its files, and were checked against the web editor and by the
+  automated screen tests, not on a screen by eye or on a DM-32UV. Windows was not checked.
+
 ## 0.5.4
 
 ### Fixed
