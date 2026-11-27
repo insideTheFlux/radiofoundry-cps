@@ -66,6 +66,8 @@ const OPS = {
 	sysAdd: (m) => {
 		const t = pick([1, 3]); const s = newSystem(m, t, word(16));
 		if (t === 3) Object.assign(s.fields, { wacn: chance(0.3) ? null : rnd(0xFFFFF), sysid: chance(0.3) ? null : rnd(0xFFF), ccNac: chance(0.3) ? null : rnd(0xFFF), skipEnc: chance(0.5), planOnly: chance(0.5), noReg: chance(0.3), holdS: rnd(256), roamDbm: rnd(256) - 128 });
+		// A network the radio never transmits on (WACN BEE00..BEEFF, system ID 00A) now and then, so a reader decodes and re-encodes such systems (random IDs hit one once in 4096). The web editor writes them listen only whatever the transmit flag says; this test starts from images the web editor already wrote, so it cannot see a CPS that writes the flag on. That is the golden test systems_encode_like_the_web_editor, step 'edits'
+		if (t === 3 && chance(0.25)) { if (chance(0.5)) s.fields.wacn = 0xBEE00 + rnd(256); else s.fields.sysid = 0x00A; }
 		else Object.assign(s.fields, { model: rnd(4), net: rnd(4), category: pick(["a", "b"]), colorCode: rnd(16), allCalls: chance(0.5), privateCalls: chance(0.5), acceptAls: chance(0.3), planBaseHz: chance(0.5) ? 0 : 440000000 + 12500 * rnd(100), planFirstLcn: rnd(4095), planSep: rnd(8), planSplitHz: chance(0.5) ? 0 : 5000000, leaveDbm: rnd(256) - 128, powerSave: rnd(8), fallbackHold: rnd(256), sites: Array.from({ length: rnd(5) }, () => rnd(4)) });
 		s.tx = chance(0.5); s.ownId = chance(0.5) ? 0 : 1 + rnd(16776415);
 		const nEntries = 1 + rnd(4);

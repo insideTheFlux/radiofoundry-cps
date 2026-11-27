@@ -246,7 +246,7 @@ pub struct PortInfo {
 
 /// USB vendor and product ids of the serial chips radios and their cables use. `None` for a product matches every
 /// product of the vendor.
-const CABLE_CHIPS: [(u16, Option<u16>); 8] = [
+const CABLE_CHIPS: [(u16, Option<u16>); 9] = [
     (0x0403, None),         // FTDI
     (0x2100, None),         // RT Systems cables: an FTDI chip under the vendor's own id
     (0x1A86, Some(0x7523)), // CH340
@@ -254,6 +254,7 @@ const CABLE_CHIPS: [(u16, Option<u16>); 8] = [
     (0x10C4, Some(0xEA60)), // CP210x
     (0x067B, None),         // Prolific
     (0x1FC9, Some(0x0094)), // the open-firmware radios' USB serial
+    (0x1209, Some(0x7388)), // AIOC (0x1209 is the shared pid.codes vendor id, so only this product)
     (0x0483, Some(0x5740)), // STM32 virtual COM port
 ];
 
@@ -327,6 +328,8 @@ mod cable_tests {
             "RT Systems USB-K4Y: FTDI under its own vendor id"
         );
         assert!(is_cable_chip(0x1A86, 0x7523), "CH340");
+        assert!(is_cable_chip(0x1209, 0x7388), "AIOC");
+        assert!(!is_cable_chip(0x1209, 0x0001), "the shared vendor id with another product");
         assert!(
             !is_cable_chip(0x1A86, 0x0001),
             "CH340's vendor, not a listed product"

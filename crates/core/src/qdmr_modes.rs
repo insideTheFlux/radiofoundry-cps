@@ -239,7 +239,7 @@ pub fn export_modes<'a>(
             ("id", Value::str(id.clone())),
             ("type", Value::str(type_short(s.type_id).unwrap_or("?"))),
             ("name", Value::str(s.name.clone())),
-            ("transmit", Value::Bool(s.tx)),
+            ("transmit", Value::Bool(s.transmits())),
             ("ownId", int(s.own_id)),
             ("authenticates", Value::Bool(s.needs_key)),
             ("sharing", sharing_text(s.sharing)),

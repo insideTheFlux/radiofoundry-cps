@@ -800,11 +800,11 @@ fn a_system_is_added_edited_and_deleted() {
     let s = &doc_systems(&h)[0];
     assert_eq!((s.number, s.tx, s.name.as_str()), (1, false, "System 1"));
 
-    type_into(&mut h, "WACN", "BEE00");
+    type_into(&mut h, "WACN", "A1B2C");
     type_into(&mut h, "System ID", "3AB");
     retype(&mut h, "Hold on the voice channel (s)", "9");
     match &doc_systems(&h)[0].fields {
-        SystemFields::P25Trunk(f) => assert_eq!((f.wacn, f.sysid, f.hold_s), (Some(0xBEE00), Some(0x3AB), 9)),
+        SystemFields::P25Trunk(f) => assert_eq!((f.wacn, f.sysid, f.hold_s), (Some(0xA1B2C), Some(0x3AB), 9)),
         other => panic!("{other:?}"),
     }
     // The transmit side is a choice; "without registering" also sets the system's no-register option.
@@ -845,6 +845,30 @@ fn system_with_control() -> System {
         raw: Vec::new(),
     });
     s
+}
+
+#[test]
+fn a_blocked_p25_system_is_listen_only_and_says_why() {
+    let mut h = harness_on_systems(|_| {});
+    click(&mut h, "Add P25 trunked system");
+    type_into(&mut h, "System ID", "3AB");
+    pick(&mut h, "Transmit side", "Transmit and register");
+    assert!(doc_systems(&h)[0].tx && doc_systems(&h)[0].transmits());
+
+    // A WACN in BEE00..BEEFF: the notice names it and what the user chose is kept
+    type_into(&mut h, "WACN", "BEE12");
+    h.get_by_label_contains("WACN BEE12 is widely used by public safety systems");
+    let s = &doc_systems(&h)[0];
+    assert!(s.tx && !s.transmits(), "the choice stays, the effect is listen only");
+
+    // The WACN changed to another: it transmits again, with the notice gone
+    retype(&mut h, "WACN", "A1B2C");
+    assert!(doc_systems(&h)[0].transmits());
+
+    // The system ID 00A is blocked on its own
+    retype(&mut h, "System ID", "00A");
+    h.get_by_label_contains("System ID 00A is widely used by public safety systems");
+    assert!(!doc_systems(&h)[0].transmits());
 }
 
 #[test]

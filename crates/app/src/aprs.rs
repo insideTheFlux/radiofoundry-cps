@@ -161,6 +161,8 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u8, selected: &mut Option<u8>) {
         if let Some(v) = v {
             a.tx_hz = v;
         }
+        ui.end_row();        ui.label("");
+        ui.label(RichText::new("Empty: the radio uses its own APRS frequency setting.").size(13.0).color(muted));
         ui.end_row();
         for (label, value) in [
             ("300 baud (else 1200)", &mut a.baud300),

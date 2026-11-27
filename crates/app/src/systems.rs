@@ -60,7 +60,7 @@ pub fn show(ui: &mut Ui, cp: &mut Codeplug, selected: &mut Option<u16>) {
             ui.separator();
             egui::ScrollArea::vertical().id_salt("system_list").show(ui, |ui| {
                 for s in &cp.systems {
-                    let mode = if s.tx { "" } else { ", listen only" };
+                    let mode = if s.transmits() { "" } else { ", listen only" };
                     ui.selectable_value(
                         selected,
                         Some(s.number),
@@ -409,14 +409,18 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
         });
         ui.end_row();
         let l = ui.label("Transmit side");
-        let text = match (s.tx, matches!(&s.fields, SystemFields::P25Trunk(f) if f.no_reg)) {
+        // A network the radio never transmits on shows as listen only and cannot be changed; the choice made is kept,
+        // and comes back if the identity is changed (as in the web editor). What is written has the flag off.
+        let blocked = s.no_tx().is_some();
+        let text = match (s.transmits(), matches!(&s.fields, SystemFields::P25Trunk(f) if f.no_reg)) {
             (false, _) => "Listen only",
             (true, _) if matches!(s.type_id, SYSTEM_T3 | SYSTEM_NXDN | SYSTEM_AES) => "Transmit",
             (true, false) => "Transmit and register",
             (true, true) => "Transmit without registering",
         };
         let mut choice = 0u8;
-        let r = egui::ComboBox::from_id_salt(("sys_tx", number))
+        let r = ui.add_enabled_ui(!blocked, |ui| {
+            egui::ComboBox::from_id_salt(("sys_tx", number))
             .selected_text(text)
             .width(240.0)
             .show_ui(ui, |ui| {
@@ -430,7 +434,9 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
                     ui.selectable_value(&mut choice, 3, "Transmit without registering");
                 }
             })
-            .response;
+            .response
+        })
+        .inner;
         r.labelled_by(l.id);
         if choice != 0 {
             s.tx = choice != 1;
@@ -477,6 +483,10 @@ fn form(ui: &mut Ui, cp: &mut Codeplug, number: u16, selected: &mut Option<u16>)
             ui.end_row();
         });
         ui.label(RichText::new("Hex. Empty means any.").size(13.0).color(muted));
+        // A network the radio never transmits on: the ID that matched, right under the fields that trigger it
+        if let Some(n) = f.no_tx() {
+            ui.label(RichText::new(n.note()).size(13.0).color(theme::palette(ui).bad));
+        }
 
         group(ui, "Calls and roaming");
         egui::Grid::new(("sys_calls", number)).num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
@@ -581,6 +591,9 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
     let at_limit = s.entries.len() >= MAX_ENTRIES;
     let mut remove: Option<usize> = None;
     let mut swap: Option<(usize, usize)> = None;
+    // On a system the radio never transmits on, the columns only a transmitter reads are left out of the tables;
+    // their values stay in the rows and are saved as they were
+    let hide_tx = s.no_tx().is_some();
 
     group(ui, "Sites");
     egui::Grid::new(("sys_sites", number)).num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
@@ -610,9 +623,11 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
     group(ui, "Control channels");
     ui.label(RichText::new("In the order tried: the first is the primary. The TX frequency is empty when it comes from the plan's transmit offset.").size(13.0).color(muted));
     let ctl: Vec<usize> = s.entries.iter().enumerate().filter(|(_, e)| e.cls == 0 && e.control).map(|(i, _)| i).collect();
-    egui::Grid::new(("sys_ctl", number)).num_columns(7).spacing([12.0, 6.0]).show(ui, |ui| {
+    egui::Grid::new(("sys_ctl", number)).num_columns(if hide_tx { 6 } else { 7 }).spacing([12.0, 6.0]).show(ui, |ui| {
         for t in ["#", "Site", "RX MHz", "TX MHz", "Identifier", "Channel", "", ""] {
-            ui.label(t);
+            if !(hide_tx && t == "TX MHz") {
+                ui.label(t);
+            }
         }
         ui.end_row();
         for (k, &i) in ctl.iter().enumerate() {
@@ -621,7 +636,9 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
             let l = ui.label(format!("{}", k + 1));
             num_field(ui, egui::Id::unique(("ctl_site", number, i)), group, 254, 50.0).labelled_by(l.id);
             mhz_field(ui, egui::Id::unique(("ctl_rx", number, i)), rx_hz, false).accessible_name(format!("RX MHz, control channel {}", k + 1));
-            mhz_field(ui, egui::Id::unique(("ctl_tx", number, i)), tx_hz, true).accessible_name(format!("TX MHz, control channel {}", k + 1));
+            if !hide_tx {
+                mhz_field(ui, egui::Id::unique(("ctl_tx", number, i)), tx_hz, true).accessible_name(format!("TX MHz, control channel {}", k + 1));
+            }
             num_field(ui, egui::Id::unique(("ctl_iden", number, i)), iden, 15, 50.0).accessible_name(format!("Identifier, control channel {}", k + 1));
             num_field(ui, egui::Id::unique(("ctl_chan", number, i)), chan_no, 4095, 60.0).accessible_name(format!("Channel, control channel {}", k + 1));
             ui.horizontal(|ui| {
@@ -645,9 +662,11 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
 
     group(ui, "Channel plan");
     ui.label(RichText::new("One row per channel identifier. An identifier not programmed here is learned from the control channel.").size(13.0).color(muted));
-    egui::Grid::new(("sys_plan", number)).num_columns(8).spacing([12.0, 6.0]).show(ui, |ui| {
+    egui::Grid::new(("sys_plan", number)).num_columns(if hide_tx { 7 } else { 8 }).spacing([12.0, 6.0]).show(ui, |ui| {
         for t in ["Identifier", "Base MHz", "Spacing Hz", "TX offset Hz", "Bandwidth Hz", "TDMA", "Slots", ""] {
-            ui.label(t);
+            if !(hide_tx && t == "TX offset Hz") {
+                ui.label(t);
+            }
         }
         ui.end_row();
         for (i, e) in s.entries.iter_mut().enumerate() {
@@ -655,11 +674,13 @@ fn entries(ui: &mut Ui, s: &mut System, number: u16) {
             num_field(ui, egui::Id::unique(("plan_id", number, i)), group, 15, 50.0).accessible_name(format!("Identifier, plan row {}", i + 1));
             mhz_field(ui, egui::Id::unique(("plan_base", number, i)), base_hz, false).accessible_name(format!("Base MHz, identifier {group}"));
             num_field(ui, egui::Id::unique(("plan_sp", number, i)), spacing_hz, 1_000_000, 80.0).accessible_name(format!("Spacing Hz, identifier {group}"));
-            let id = egui::Id::unique(("plan_off", number, i));
-            let (r, v) = boxed(ui, 100.0, |ui| checked_text(ui, id, tx_offset_hz.to_string(), 100.0, |t| t.trim().parse::<i32>().ok()));
-            let _ = r.accessible_name(format!("TX offset Hz, identifier {group}"));
-            if let Some(v) = v {
-                *tx_offset_hz = v;
+            if !hide_tx {
+                let id = egui::Id::unique(("plan_off", number, i));
+                let (r, v) = boxed(ui, 100.0, |ui| checked_text(ui, id, tx_offset_hz.to_string(), 100.0, |t| t.trim().parse::<i32>().ok()));
+                let _ = r.accessible_name(format!("TX offset Hz, identifier {group}"));
+                if let Some(v) = v {
+                    *tx_offset_hz = v;
+                }
             }
             num_field(ui, egui::Id::unique(("plan_bw", number, i)), bw_hz, 1_000_000, 80.0).accessible_name(format!("Bandwidth Hz, identifier {group}"));
             ui.checkbox(tdma, "").accessible_name(format!("TDMA, identifier {group}"));

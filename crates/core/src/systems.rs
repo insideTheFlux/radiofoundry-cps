@@ -191,6 +191,47 @@ pub struct P25Trunk {
     pub roam_dbm: i8,
 }
 
+/// Network IDs the radio never transmits on: WACN BEE00..BEEFF, system ID 00A. The firmware enforces it
+/// (core/p25/p25.h in RadioFoundry: P25_WACN_NO_TX, P25_WACN_NO_TX_MASK, P25_SYSID_NO_TX); these copies only let the
+/// editor show it and write the flag as the web editor does.
+pub const WACN_NO_TX: u32 = 0xBEE00;
+pub const WACN_NO_TX_MASK: u32 = 0xFFF00;
+pub const SYSID_NO_TX: u16 = 0x00A;
+
+/// Which ID of a system makes the radio refuse to transmit on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoTx {
+    /// The WACN is in the blocked range.
+    Wacn(u32),
+    /// The system ID is the blocked one.
+    SysId(u16),
+}
+
+impl NoTx {
+    /// The editor's notice, worded as the web editor's (`editor.p25.no_tx_wacn` and `editor.p25.no_tx_sysid`).
+    pub fn note(self) -> String {
+        let (what, id, which) = match self {
+            NoTx::Wacn(w) => ("WACN", format!("{w:05X}"), "WACN"),
+            NoTx::SysId(i) => ("System ID", format!("{i:03X}"), "system ID"),
+        };
+        format!(
+            "{what} {id} is widely used by public safety systems. RadioFoundry is not approved to transmit on public \
+             safety systems, and does not register or transmit on systems with this {which}. This system will be \
+             listen-only."
+        )
+    }
+}
+
+impl P25Trunk {
+    /// The block that matched, or `None` when the radio may transmit on this system. The WACN is checked first.
+    pub fn no_tx(&self) -> Option<NoTx> {
+        if let Some(w) = self.wacn.filter(|w| w & WACN_NO_TX_MASK == WACN_NO_TX) {
+            return Some(NoTx::Wacn(w));
+        }
+        self.sysid.filter(|&i| i == SYSID_NO_TX).map(NoTx::SysId)
+    }
+}
+
 /// The identity is the first five octets of the block.
 const P25_ID_LEN: u8 = 5;
 
@@ -702,6 +743,21 @@ pub struct System {
 }
 
 impl System {
+    /// The system's blocked ID, if its type has one (a P25 trunked system with a WACN or system ID the radio never
+    /// transmits on).
+    pub fn no_tx(&self) -> Option<NoTx> {
+        match &self.fields {
+            SystemFields::P25Trunk(f) => f.no_tx(),
+            _ => None,
+        }
+    }
+
+    /// Whether the system transmits: its flag, unless the radio never transmits on it. What is written to the record
+    /// and the qdmr file, and what the editor shows; the flag itself stays as the user set it.
+    pub fn transmits(&self) -> bool {
+        self.tx && self.no_tx().is_none()
+    }
+
     /// A new system of `type_id`.
     pub fn new(type_id: u8, name: &str) -> Self {
         Self {
@@ -851,7 +907,7 @@ fn encode_system(s: &System, prev: Option<&[u8]>, names: &HashMap<u16, &str>) ->
     let mut v = vec![0u8; SYS_HDR + block.len()];
     v[0] = s.type_id;
     v[1] = (was.as_ref().map_or(0, |w| w.flags) & !(SYS_TX | SYS_NEEDS_KEY))
-        | if s.tx { SYS_TX } else { 0 }
+        | if s.transmits() { SYS_TX } else { 0 }
         | if s.needs_key { SYS_NEEDS_KEY } else { 0 };
     v[2] = s.sharing;
     v[3] = len;
@@ -1157,5 +1213,34 @@ mod tests {
     fn a_new_tier_iii_system_transmits_and_a_new_p25_trunked_one_listens() {
         assert!(System::new(SYSTEM_T3, "T").tx);
         assert!(!System::new(SYSTEM_P25_TRUNK, "P").tx);
+    }
+
+    #[test]
+    fn a_blocked_p25_network_is_written_listen_only_whatever_the_flag_says() {
+        let mut s = System::new(SYSTEM_P25_TRUNK, "Blocked");
+        s.tx = true;
+        let SystemFields::P25Trunk(f) = &mut s.fields else { unreachable!() };
+        // Not blocked: any other WACN or system ID, and "any"
+        f.wacn = Some(0xBEDFF);
+        f.sysid = Some(0x00B);
+        assert!(s.no_tx().is_none() && s.transmits());
+        let SystemFields::P25Trunk(f) = &mut s.fields else { unreachable!() };
+        // The WACN range is BEE00..BEEFF; the WACN is named first when both match
+        f.wacn = Some(0xBEE00);
+        assert_eq!(s.no_tx(), Some(NoTx::Wacn(0xBEE00)));
+        let SystemFields::P25Trunk(f) = &mut s.fields else { unreachable!() };
+        f.wacn = Some(0xBEEFF);
+        f.sysid = Some(0x00A);
+        assert_eq!(s.no_tx(), Some(NoTx::Wacn(0xBEEFF)));
+        let SystemFields::P25Trunk(f) = &mut s.fields else { unreachable!() };
+        f.wacn = Some(0xBEF00);
+        assert_eq!(s.no_tx(), Some(NoTx::SysId(0x00A)));
+        // The flag the user set stays; what is written is off, and a type with no such rule is untouched
+        assert!(s.tx && !s.transmits());
+        let mut t3 = System::new(SYSTEM_T3, "T");
+        t3.tx = true;
+        assert!(t3.transmits());
+        assert!(NoTx::Wacn(0xBEE12).note().starts_with("WACN BEE12 is widely used by public safety systems."));
+        assert!(NoTx::SysId(0x00A).note().contains("this system ID. This system will be listen-only."));
     }
 }
